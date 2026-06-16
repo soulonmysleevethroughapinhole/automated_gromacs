@@ -1,0 +1,38 @@
+cpp                 =  /usr/bin/cpp
+constraints         =  all-bonds
+; Run parameters
+integrator              = md        ; leap-frog integrator
+nsteps                  = 50000000    ; 2 fs * 50000000 steps/ 1000 (fs/ps) = 100000 ps (100 ns)
+dt                      = 0.002     ; 2 fs
+; Output control
+nstxout                 = 0         ; suppress bulky .trr file by specifying 
+nstvout                 = 0         ; 0 for output frequency of nstxout,
+nstfout                 = 0         ; nstvout, and nstfout
+nstenergy               = 500000      ; save energies every 100 ps
+nstlog                  = 500000      ; update log file every 100 ps
+nstxout-compressed      = 500000      ; save compressed coordinates every 100 ps
+compressed-x-grps       = System    ; save the whole system
+
+nstlist             =  10
+ns_type             =  grid
+coulombtype         =  PME
+cutoff-scheme       =  Verlet
+fourierspacing      =  0.12
+rlist               =  1.1
+rcoulomb            =  1.1
+rvdw                =  1.1
+
+Tcoupl              =  v-rescale
+tc-grps		    =  Protein	non-Protein
+tau_t               =  0.1	0.1
+ref_t               =  298	298
+
+Pcoupl              =  Parrinello-Rahman
+tau_p               =  0.5
+compressibility     =  4.5e-5
+ref_p               =  1.0
+refcoord_scaling    =  all
+
+gen_vel             =  yes
+gen_temp            =  298
+gen_seed            =  28480426

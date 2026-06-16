@@ -1,0 +1,27 @@
+;
+;	EM input altalanos
+;
+cpp                 =  /lib/cpp
+define              =  -DFLEXIBLE
+constraints         =  none
+integrator          =  cg
+dt                  =  0.001
+nsteps              =  50000
+nstlist             =  10
+ns_type             =  grid
+rlist               =  0.9
+coulombtype         =  PME
+rcoulomb            =  1.0
+rvdw                =  1.0
+fourierspacing      =  0.12
+fourier_nx          =  0
+fourier_ny          =  0
+fourier_nz          =  0
+pme_order           =  4
+ewald_rtol          =  1e-5
+optimize_fft        =  yes
+;
+;	Energy minimizing stuff
+;
+emtol               =  10
+emstep              =  0.05

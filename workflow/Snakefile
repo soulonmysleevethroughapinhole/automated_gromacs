@@ -1,0 +1,221 @@
+import os
+import glob
+
+# Collect all raw CIF files for SARS-CoV-2 Wuhan strain proteins, 
+# later may extend to new protein groups listed in config.yaml
+#RAW_CIFS = glob.glob("data/proteins/empirical/sars_cov_2_wuhan/*/*.cif")
+#TARGETS = [os.path.basename(os.path.dirname(cif)) for cif in RAW_CIFS]
+TARGETS = ['7UU9']
+configfile: "config/config.yaml"
+
+# Final output of workflow, a 100nanosecond movie generated with PyMol
+rule all:
+    input:
+        #expand("results/{target}/plots/trajectory_analysis.png", target=config["targets"])
+        expand("results/{pdb}/movies/100ns_md_trajectory.mov", pdb=TARGETS)
+
+# Rule 1:  Clean Protein
+# this may not be needed due to pdbfixer
+rule prepare_structure:
+    input:
+        #pdb = "data/proteins/empirical/sars_cov_2_wuhan/pdbs/{pdb}.pdb"
+        input_pdb = "data/proteins/empirical/sars_cov_2_wuhan/{pdb}/{pdb}.pdb"
+    output:
+        pdb_clean = "results/proteins/{pdb}/cleaned_protein.pdb",
+        #top = "results/{target}/topology.top"
+    shell: # NOTE: maybe pass input path
+        "scripts/fix_structure.py {input.input_pdb} {output.pdb_clean}"
+
+# Rule 1.5: Optional step to add missing residues or loops using Modeller and PyRosett
+
+# Rule 1.66: Add hydrogens and energy minimize 
+
+# Rule 1.75: Prepare protein and  generate topology
+rule prepare_system:
+    input:
+        pdb_clean = "results/proteins/{pdb}/cleaned_protein.pdb",
+    output:
+        gro_processed = "results/gromacs/{pdb}/md/{pdb}_processed.gro",
+        gro_box = "results/gromacs/{pdb}/md/{pdb}_newbox.gro",
+        gro_solv = "results/gromacs/{pdb}/md/{pdb}_solv.gro",
+        top = "results/gromacs/{pdb}/md/topol.top",
+    
+        #prepared_st = "results/gromacs/{target}/prepared.pdb"
+        #prepared_cg = "results/gromacs/{target}/prepared.pdb"
+        #prepared_mdp = "results/gromacs/{target}/prepared.pdb"
+    params:
+        water = "tip3p",
+        ff = "amber99sb-ildn",
+    log:
+        "logs/{pdb}/pdb2gmx.log"
+    shell:
+        """
+        # absolute path of PDB
+        PDB_ABS_path = $(readlink -f {input.pdb_clean})
+
+        mkdir -p results/gromacs/{wildcards.pdb}/md
+        cd results/gromacs/{wildcards.pdb}/md
+
+        gmx pdb2gmx -water {params.water} -ff {params.ff} -ignh \
+            -f $PDB_ABS_path -o {output.gro_processed} -p {output.top} > {log} 2>&1
+
+        gmx editconf -f {output.gro_processed} -o {output.gro_box} -d 1.0 -bt cubic >> {log} 2>&1
+        gmx solvate -cp {output.gro_box} -cs spc216.gro -o {output.gro_solv} -p {output.top} >> {log} 2>&1
+
+
+        """
+# Rule 2.1 add ions to neutralize 
+rule add_ions:
+    input:
+        gro_solv = "results/gromacs/{pdb}/md/{pdb}_solv.gro",
+        top = "results/gromacs/{pdb}/md/topol.top",
+        mdp = 'config/gromacs_settings/interruptable_config_ultimate/emw_steep.mdp'
+    output:
+        tpr_em = "results/gromacs/{pdb}/md/em_setup.gro",
+        gro_ions = "results/gromacs/{pdb}/md/ion_b4em.gro",
+    log:
+        "logs/{pdb}/genion.log"
+    shell:
+        """
+        gmx grompp -v -f {input.mdp} -c {input.gro_solv} -o {output.tpr_em} -p {input.top} -maxwarn 1 > {log} 2>&1
+        echo "SOL" | gmx genion -s {output.tpr_em} -o {output.gro_ions} -p {input.top} -pname NA -nname CL -neutral >> {log} 2>&1
+        """
+# 3 st minimization
+rule minimize_steepest:
+    input:
+        gro_ions = "results/gromacs/{pdb}/md/ion_b4em.gro",
+        top = "results/gromacs/{pdb}/md/topol.top",
+        mdp = 'config/gromacs_settings/interruptable_config_ultimate/emw_steep.mdp',
+
+    output:
+        gro_st = "results/gromacs/{pdb}/md/after_st.gro",
+        tpr_st = "results/gromacs/{pdb}/md/st.tpr",
+        trr_st = "results/gromacs/{pdb}/md/st.trr",
+        log_st = "results/gromacs/{pdb}/md/st.log",
+    log:
+        "logs/{pdb}/gmx_mdrun_steep.log"
+
+    shell:
+        """
+        gmx grompp -v -f {input.mdp} -c {input.gro_ions} -o {output.tpr_st} -p {input.top} -maxwarn 1 > {log} 2>&1
+        gmx mdrun -v -s {output.tpr_st} -o {output.trr_st} -c {output.gro_st} -g {output.log_st} >> {log} 2>&1
+        """
+#rule 4: cg minimization
+rule minimize_conjugate:
+    input:
+        gro_st = "results/gromacs/{pdb}/md/after_st.gro",
+        top = "results/gromacs/{pdb}/md/topol.top",
+        mdp = 'config/gromacs_settings/interruptable_config_ultimate/emw_cg.mdp',
+    output:
+        tpr_cg = "results/gromacs/{pdb}/md/cg.tpr",
+        gro_cg = "results/gromacs/{pdb}/md/after_cg.gro",
+        trr_cg = "results/gromacs/{pdb}/md/cg.trr",
+        log_cg = "results/gromacs/{pdb}/md/cg.log",
+    log:
+        "logs/{pdb}/gmx_mdrun_cg.log"
+    shell:
+        """
+        gmx grompp -v -f {input.mdp} -c {input.gro_st} -o {output.tpr_cg} -p {input.top} -maxwarn 1 > {log} 2>&1
+        gmx mdrun -v -s {output.tpr_cg} -o {output.trr_cg} -c {output.gro_cg} -g {output.log_cg} >> {log} 2>&1
+        """
+
+# Rule 5: Run 100n Molecular Dynamics
+rule run_molecular_dynamics:
+    input:
+        gro_cg = "results/gromacs/{pdb}/md/after_cg.gro",
+        top = "results/gromacs/{pdb}/md/topol.top",
+        mdp = "config/gromacs_settings/interruptable_config_ultimate/md.mdp",
+    output:
+        gro_md = "results/gromacs/{pdb}/md/md.gro",
+        xtc_md = "results/gromacs/{pdb}/md/md.xtc",
+        tpr_md = "results/gromacs/{pdb}/md/md.tpr",
+    log:
+        "logs/{pdb}/production_mdrun.log"
+    resources:
+        gpu = 1
+    run:
+        # Step A: Compile the .tpr ONLY if it doesn't exist yet
+        if not os.path.exists(output.tpr_md):
+            shell("gmx grompp -f {input.mdp} -o {output.tpr_md} -c {input.gro_cg} -r {input.gro_cg} -p {input.top} -maxwarn 1 > {log} 2>&1")
+        
+        # Step B: Check for the presence of an active checkpoint file (.cpt)
+        cpt_path = f"results/{wildcards.pdb}/md.cpt"
+        if os.path.exists(cpt_path):
+            print(f"--> [Snakemake] Active checkpoint detected. Resuming {wildcards.pdb}...")
+            shell("gmx mdrun -v -deffnm results/{wildcards.pdb}/md -cpi {cpt_path} -nb gpu -pme gpu >> {log} 2>&1")
+        else:
+            print(f"--> [Snakemake] Launching fresh execution tree for {wildcards.pdb}...")
+            shell("gmx mdrun -v -deffnm results/{wildcards.pdb}/md -nb gpu -pme gpu >> {log} 2>&1")
+
+# Rule 6: Process Trajectory and Extract Low-Energy/Representative Snapshots
+# rule process_trajectory:
+#     input:
+#         xtc = "results/gromacs/{pdb}/md/trajectory.xtc",
+#         tpr = "results/gromacs/{pdb}/md/sim.tpr",
+#     output:
+#         snapshots = directory("results/{pdb}/snapshots/")
+#     script:
+#         "../scripts/cluster_trajectory.py"
+
+# --- STEP 6: TRAJECTORY CLEANING & PBC WRAPPING CORRECTION ---
+rule pbc_correction_and_extract:
+    input:
+        xtc_md = "results/gromacs/{pdb}/md/md.xtc",
+        tpr_md = "results/gromacs/{pdb}/md/md.tpr",
+    output:
+        tar = "results/gromacs/{pdb}/md/FRAMES_compressed.tar.gz"
+    log:
+        "logs/{pdb}/trjconv_pbc.log"
+    shell:
+        """
+        # 1. Recenter molecular unity boundaries
+        echo "Protein" | gmx trjconv -f {input.xtc_md} -s {input.tpr_md} -o results/{wildcards.pdb}/md_whole.xtc -pbc mol -ur compact > {log} 2>&1
+        
+        # 2. Fit rotational and translational structural drift
+        echo "Protein Protein Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/md/md_whole.xtc -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/md/md_clean.xtc -center -fit rot+trans >> {log} 2>&1
+        
+        # 3. Chop trajectory into individual PDB frames
+        mkdir -p results/{wildcards.pdb}/FRAMES
+        echo "Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/md/md_clean.xtc -o results/gromacs/{wildcards.pdb}/md/FRAMES/frame.pdb -s {input.tpr_md} -sep >> {log} 2>&1
+        
+        # Compress and archive individual coordinate files
+        tar -czf {output.tar} -C results/{wildcards.pdb} FRAMES >> {log} 2>&1
+        
+        # Clean up massive intermediate trajectories to preserve space
+        # rm -f results/{wildcards.pdb}/md_whole.xtc results/{wildcards.pdb}/md_clean.xtc
+        """
+
+
+# --- STEP 7: AUTOMATED PYMOL MOVIE GENERATION ---
+rule generate_pymol_movie:
+    input:
+        tar = "results/gromacs/{pdb}/md/FRAMES_compressed.tar.gz"
+    output:
+        movie = "results/{pdb}/movies/100ns_md_trajectory.mov"
+    log:
+        "logs/{pdb}/pymol_render.log"
+    shell:
+        "python scripts/render_pymol_movie.py {input.tar} {output.movie} > {log} 2>&1"
+# Rule 4: Run Quantum Mechanical / Excited-State Calculations on Snapshots
+# rule run_quantum_mechanics:
+    # input:
+        # snapshots = "results/{pdb}/snapshots/"
+    # output:
+        # qm_out = "results/{pdb}/qm_results.dat"
+    # shell:
+        # # Loops through extracted snapshots and runs MOPAC or ORCA
+        # """
+        # for f in {input.snapshots}/*.inp; do
+            # {config[mopac_command]} $f
+        # done
+        # touch {output.qm_out}
+        # """
+
+# # Rule 5: Compile calculations and plot final theoretical UV-Vis or Enthalpy graph
+# rule plot_results:
+    # input:
+        # qm_out = "results/{pdb}/qm_results.dat"
+    # output:
+        # plot = "results/{pdb}/final_spectra.png"
+    # script:
+        # "../scripts/parse_qm_spectra.py"
