@@ -1,0 +1,101 @@
+                      :-) GROMACS - gmx grompp, 2025.3 (-:
+
+Executable:   /usr/local/gromacs/bin/gmx
+Data prefix:  /usr/local/gromacs
+Working dir:  /home/johnnys/Projects/automated_gromacs
+Command line:
+  gmx grompp -f config/gromacs_settings/interruptable_config_ultimate/md.mdp -o results/gromacs/7UU9/md/md.tpr -c results/gromacs/7UU9/md/after_cg.gro -r results/gromacs/7UU9/md/after_cg.gro -p results/gromacs/7UU9/md/topol.top -maxwarn 1
+
+Ignoring obsolete mdp entry 'cpp'
+Ignoring obsolete mdp entry 'ns_type'
+
+WARNING 1 [file config/gromacs_settings/interruptable_config_ultimate/md.mdp]:
+  You are generating velocities so I am assuming you are equilibrating a
+  system. You are using Parrinello-Rahman pressure coupling, but this can
+  be unstable for equilibration. If your system crashes, try equilibrating
+  first with Berendsen pressure coupling. If you are not equilibrating the
+  system, you can probably ignore this warning.
+
+Generating 1-4 interactions: fudge = 0.5
+
+NOTE 1 [file unknown]:
+  You are using constraints on all bonds, whereas the forcefield has been
+  parametrized only with constraints involving hydrogen atoms. We suggest
+  using constraints = h-bonds instead, this will also improve performance.
+
+Number of degrees of freedom in T-Coupling group Protein is 9162.87
+Number of degrees of freedom in T-Coupling group non-Protein is 205311.12
+
+There was 1 NOTE
+
+There was 1 WARNING
+
+GROMACS reminds you: "Science progresses best when observations force us to alter our preconceptions." (Vera Rubin)
+
+Setting the LD random seed to -560792713
+
+Generated 2145 of the 2145 non-bonded parameter combinations
+
+Generated 2145 of the 2145 1-4 parameter combinations
+
+Excluding 3 bonded neighbours molecule type 'Protein_chain_A'
+
+turning all bonds into constraints...
+
+Excluding 2 bonded neighbours molecule type 'SOL'
+
+turning all bonds into constraints...
+
+Excluding 2 bonded neighbours molecule type 'SOL'
+
+Excluding 1 bonded neighbours molecule type 'NA'
+
+turning all bonds into constraints...
+
+Velocities were taken from a Maxwell distribution at 298 K
+Analysing residue names:
+There are:   301    Protein residues
+There are: 34218      Water residues
+There are:     2        Ion residues
+Analysing Protein...
+
+The largest distance between excluded atoms is 0.423 nm between atom 89 and 97
+
+Determining Verlet buffer for a tolerance of 0.005 kJ/mol/ps at 298 K
+
+Calculated rlist for 1x1 atom pair-list as 1.134 nm, buffer size 0.034 nm
+
+Set rlist, assuming 4x4 atom pair-list, to 1.100 nm, buffer size 0.000 nm
+
+Note that mdrun will redetermine rlist based on the actual pair-list setup
+Calculating fourier grid dimensions for X Y Z
+Using a fourier grid of 96x96x96, spacing 0.107 0.107 0.107
+
+Estimate for the relative computational load of the PME mesh part: 0.31
+
+This run will generate roughly 60 Mb of data
+                      :-) GROMACS - gmx mdrun, 2025.3 (-:
+
+Executable:   /usr/local/gromacs/bin/gmx
+Data prefix:  /usr/local/gromacs
+Working dir:  /home/johnnys/Projects/automated_gromacs
+Command line:
+  gmx mdrun -v -deffnm results/7UU9/md -nb gpu -pme gpu
+
+
+-------------------------------------------------------
+Program:     gmx mdrun, version 2025.3
+Source file: src/gromacs/options/options.cpp (line 184)
+Function:    void gmx::internal::OptionSectionImpl::finish()
+
+Error in user input:
+Invalid input values
+  In option s
+    Required option was not provided, and the default file 'topol' does not
+    exist or is not accessible.
+    The following extensions were tried to complete the file name:
+      .tpr
+
+For more information and tips for troubleshooting, please check the GROMACS
+website at https://manual.gromacs.org/current/user-guide/run-time-errors.html
+-------------------------------------------------------

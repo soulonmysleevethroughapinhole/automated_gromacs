@@ -24,7 +24,7 @@ rule prepare_structure:
         pdb_clean = "results/proteins/{pdb}/cleaned_protein.pdb",
         #top = "results/{target}/topology.top"
     shell: # NOTE: maybe pass input path
-        "scripts/fix_structure.py {input.input_pdb} {output.pdb_clean}"
+        "python scripts/fix_structure.py {input.input_pdb} {output.pdb_clean}"
 
 # Rule 1.5: Optional step to add missing residues or loops using Modeller and PyRosett
 
@@ -46,21 +46,27 @@ rule prepare_system:
     params:
         water = "tip3p",
         ff = "amber99sb-ildn",
+        pdb_abs = lambda wildcards, input: os.path.abspath(input.pdb_clean),
+        # NOTE: maybe lambda basenames for output files
     log:
         "logs/{pdb}/pdb2gmx.log"
     shell:
         """
         # absolute path of PDB
-        PDB_ABS_path = $(readlink -f {input.pdb_clean})
+        # PDB_ABS_path = $(readlink -f {input.pdb_clean})
+        # absolute path of log file
+        LOG_ABS=$(readlink -f {log})
 
         mkdir -p results/gromacs/{wildcards.pdb}/md
         cd results/gromacs/{wildcards.pdb}/md
 
         gmx pdb2gmx -water {params.water} -ff {params.ff} -ignh \
-            -f $PDB_ABS_path -o {output.gro_processed} -p {output.top} > {log} 2>&1
+            -f {params.pdb_abs} \
+            -o $(basename {output.gro_processed}) \
+            -p $(basename {output.top}) > $LOG_ABS 2>&1
 
-        gmx editconf -f {output.gro_processed} -o {output.gro_box} -d 1.0 -bt cubic >> {log} 2>&1
-        gmx solvate -cp {output.gro_box} -cs spc216.gro -o {output.gro_solv} -p {output.top} >> {log} 2>&1
+        gmx editconf -f $(basename {output.gro_processed}) -o $(basename {output.gro_box}) -d 1.0 -bt cubic >> $LOG_ABS 2>&1
+        gmx solvate -cp $(basename {output.gro_box}) -cs spc216.gro -o $(basename {output.gro_solv}) -p $(basename {output.top}) >> $LOG_ABS 2>&1
 
 
         """
@@ -71,14 +77,26 @@ rule add_ions:
         top = "results/gromacs/{pdb}/md/topol.top",
         mdp = 'config/gromacs_settings/interruptable_config_ultimate/emw_steep.mdp'
     output:
-        tpr_em = "results/gromacs/{pdb}/md/em_setup.gro",
+        tpr_em = "results/gromacs/{pdb}/md/em_setup.tpr",
         gro_ions = "results/gromacs/{pdb}/md/ion_b4em.gro",
+    params:
+        mdp_abs = lambda wildcards, input: os.path.abspath(input.mdp)
     log:
         "logs/{pdb}/genion.log"
     shell:
         """
-        gmx grompp -v -f {input.mdp} -c {input.gro_solv} -o {output.tpr_em} -p {input.top} -maxwarn 1 > {log} 2>&1
-        echo "SOL" | gmx genion -s {output.tpr_em} -o {output.gro_ions} -p {input.top} -pname NA -nname CL -neutral >> {log} 2>&1
+        LOG_ABS=$(readlink -f {log})
+
+        cd results/gromacs/{wildcards.pdb}/md
+
+        gmx grompp -v -f {params.mdp_abs} \
+            -c $(basename {input.gro_solv}) \
+            -o $(basename {output.tpr_em}) \
+            -p $(basename {input.top}) -maxwarn 1 > $LOG_ABS 2>&1
+            
+        echo "SOL" | gmx genion -s $(basename {output.tpr_em}) \
+            -o $(basename {output.gro_ions}) \
+            -p $(basename {input.top}) -pname NA -nname CL -neutral >> $LOG_ABS 2>&1
         """
 # 3 st minimization
 rule minimize_steepest:
@@ -92,13 +110,26 @@ rule minimize_steepest:
         tpr_st = "results/gromacs/{pdb}/md/st.tpr",
         trr_st = "results/gromacs/{pdb}/md/st.trr",
         log_st = "results/gromacs/{pdb}/md/st.log",
+    params:
+        mdp_abs = lambda wildcards, input: os.path.abspath(input.mdp)
     log:
         "logs/{pdb}/gmx_mdrun_steep.log"
 
     shell:
         """
-        gmx grompp -v -f {input.mdp} -c {input.gro_ions} -o {output.tpr_st} -p {input.top} -maxwarn 1 > {log} 2>&1
-        gmx mdrun -v -s {output.tpr_st} -o {output.trr_st} -c {output.gro_st} -g {output.log_st} >> {log} 2>&1
+        LOG_ABS=$(readlink -f {log})
+
+        cd results/gromacs/{wildcards.pdb}/md
+
+        gmx grompp -v -f {params.mdp_abs} \
+            -c $(basename {input.gro_ions}) \
+            -o $(basename {output.tpr_st}) \
+            -p $(basename {input.top}) -maxwarn 1 > $LOG_ABS 2>&1
+        
+        gmx mdrun -v -ntmpi 1 -s $(basename {output.tpr_st}) \
+            -o $(basename {output.trr_st}) \
+            -c $(basename {output.gro_st}) \
+            -g $(basename {output.log_st}) >> $LOG_ABS 2>&1
         """
 #rule 4: cg minimization
 rule minimize_conjugate:
@@ -111,12 +142,25 @@ rule minimize_conjugate:
         gro_cg = "results/gromacs/{pdb}/md/after_cg.gro",
         trr_cg = "results/gromacs/{pdb}/md/cg.trr",
         log_cg = "results/gromacs/{pdb}/md/cg.log",
+    params:
+        mdp_abs = lambda wildcards, input: os.path.abspath(input.mdp)
     log:
         "logs/{pdb}/gmx_mdrun_cg.log"
     shell:
         """
-        gmx grompp -v -f {input.mdp} -c {input.gro_st} -o {output.tpr_cg} -p {input.top} -maxwarn 1 > {log} 2>&1
-        gmx mdrun -v -s {output.tpr_cg} -o {output.trr_cg} -c {output.gro_cg} -g {output.log_cg} >> {log} 2>&1
+        LOG_ABS=$(readlink -f {log})
+
+        cd results/gromacs/{wildcards.pdb}/md
+
+        gmx grompp -v -f {params.mdp_abs} \
+            -c $(basename {input.gro_st}) \
+            -o $(basename {output.tpr_cg}) \
+            -p $(basename {input.top}) -maxwarn 1 > $LOG_ABS 2>&1
+        
+        gmx mdrun -v -ntmpi 1 -s $(basename {output.tpr_cg}) \
+            -o $(basename {output.trr_cg}) \
+            -c $(basename {output.gro_cg}) \
+            -g $(basename {output.log_cg}) >> $LOG_ABS 2>&1
         """
 
 # Rule 5: Run 100n Molecular Dynamics

@@ -1,0 +1,154 @@
+                      :-) GROMACS - gmx grompp, 2025.3 (-:
+
+Executable:   /usr/local/gromacs/bin/gmx
+Data prefix:  /usr/local/gromacs
+Working dir:  /home/johnnys/Projects/automated_gromacs/results/gromacs/7UU9/md
+Command line:
+  gmx grompp -v -f /home/johnnys/Projects/automated_gromacs/config/gromacs_settings/interruptable_config_ultimate/emw_steep.mdp -c 7UU9_solv.gro -o em_setup.tpr -p topol.top -maxwarn 1
+
+Ignoring obsolete mdp entry 'cpp'
+Ignoring obsolete mdp entry 'optimize_fft'
+Ignoring obsolete mdp entry 'ns_type'
+Generating 1-4 interactions: fudge = 0.5
+
+NOTE 1 [file topol.top, line 43860]:
+  System has non-zero total charge: -2.000000
+  Total charge should normally be an integer. See
+  https://manual.gromacs.org/current/user-guide/floating-point.html
+  for discussion on how close it should be to an integer.
+
+
+
+
+WARNING 1 [file topol.top, line 43860]:
+  You are using Ewald electrostatics in a system with net charge. This can
+  lead to severe artifacts, such as ions moving into regions with low
+  dielectric, due to the uniform background charge. We suggest to
+  neutralize your system with counter ions, possibly in combination with a
+  physiological salt concentration.
+
+checking input for internal consistency...
+
+Setting the LD random seed to -272646229
+
+processing topology...
+
+Generated 2145 of the 2145 non-bonded parameter combinations
+
+Generated 2145 of the 2145 1-4 parameter combinations
+
+Excluding 3 bonded neighbours molecule type 'Protein_chain_A'
+
+Excluding 2 bonded neighbours molecule type 'SOL'
+
+Excluding 2 bonded neighbours molecule type 'SOL'
+
+++++ PLEASE READ AND CITE THE FOLLOWING REFERENCE ++++
+J. S. Hub, B. L. de Groot, H. Grubmueller, G. Groenhof
+Quantifying Artifacts in Ewald Simulations of Inhomogeneous Systems with a Net
+Charge
+J. Chem. Theory Comput. (2014)
+DOI: 10.1021/ct400626b
+-------- -------- --- Thank You --- -------- --------
+
+renumbering atomtypes...
+processing index file...
+Making dummy/rest group for T-Coupling containing 107268 elements
+Making dummy/rest group for Acc. not used containing 107268 elements
+Making dummy/rest group for Freeze containing 107268 elements
+Making dummy/rest group for Energy Mon. containing 107268 elements
+Making dummy/rest group for VCM containing 107268 elements
+Number of degrees of freedom in T-Coupling group rest is 321801.00
+Making dummy/rest group for User1 containing 107268 elements
+Making dummy/rest group for User2 containing 107268 elements
+Making dummy/rest group for Compressed X containing 107268 elements
+Making dummy/rest group for Or. Res. Fit containing 107268 elements
+Making dummy/rest group for QMMM containing 107268 elements
+T-Coupling       has 1 element(s): rest
+Energy Mon.      has 1 element(s): rest
+Acc. not used    has 1 element(s): rest
+Freeze           has 1 element(s): rest
+User1            has 1 element(s): rest
+User2            has 1 element(s): rest
+VCM              has 1 element(s): rest
+Compressed X     has 1 element(s): rest
+Or. Res. Fit     has 1 element(s): rest
+QMMM             has 1 element(s): rest
+The integrator does not provide a ensemble temperature, there is no system ensemble temperature
+
+NOTE 2 [file /home/johnnys/Projects/automated_gromacs/config/gromacs_settings/interruptable_config_ultimate/emw_steep.mdp]:
+  The largest distance between excluded atoms is 0.970 nm between atom 668
+  and 682, which is larger than 90% of the cut-off distance. When excluded
+  pairs go beyond the cut-off distance, this leads to missing long-range
+  corrections in the forces and energies.
+
+
+There were 2 NOTEs
+
+There was 1 WARNING
+
+GROMACS reminds you: "Ich war schwanger, mir gings zum kotzen" (Nina Hagen)
+
+
+processing coordinates...
+
+double-checking input for internal consistency...
+
+converting bonded parameters...
+
+initialising group options...
+Analysing residue names:
+There are:   301    Protein residues
+There are: 34220      Water residues
+Analysing Protein...
+
+The largest distance between excluded atoms is 0.970 nm between atom 668 and 682
+Calculating fourier grid dimensions for X Y Z
+Using a fourier grid of 96x96x96, spacing 0.107 0.107 0.107
+
+Estimate for the relative computational load of the PME mesh part: 0.32
+
+This run will generate roughly 9 Mb of data
+
+writing run input file...
+                      :-) GROMACS - gmx genion, 2025.3 (-:
+
+Executable:   /usr/local/gromacs/bin/gmx
+Data prefix:  /usr/local/gromacs
+Working dir:  /home/johnnys/Projects/automated_gromacs/results/gromacs/7UU9/md
+Command line:
+  gmx genion -s em_setup.tpr -o ion_b4em.gro -p topol.top -pname NA -nname CL -neutral
+
+Reading file em_setup.tpr, VERSION 2025.3 (single precision)
+Reading file em_setup.tpr, VERSION 2025.3 (single precision)
+Group     0 (         System) has 107268 elements
+Group     1 (        Protein) has  4608 elements
+Group     2 (      Protein-H) has  2329 elements
+Group     3 (        C-alpha) has   301 elements
+Group     4 (       Backbone) has   903 elements
+Group     5 (      MainChain) has  1205 elements
+Group     6 (   MainChain+Cb) has  1480 elements
+Group     7 (    MainChain+H) has  1495 elements
+Group     8 (      SideChain) has  3113 elements
+Group     9 (    SideChain-H) has  1124 elements
+Group    10 (    Prot-Masses) has  4608 elements
+Group    11 (    non-Protein) has 102660 elements
+Group    12 (          Water) has 102660 elements
+Group    13 (            SOL) has 102660 elements
+Group    14 (      non-Water) has  4608 elements
+Select a group: Number of (3-atomic) solvent molecules: 34220
+
+Back Off! I just backed up topol.top to ./#topol.top.2#
+Using random seed 1021022143.
+Replacing solvent molecule 15879 (atom 52245) with NA
+Replacing solvent molecule 19359 (atom 62685) with NA
+
+
+GROMACS reminds you: "I never thought of stopping, and I just hated sleeping. I can't imagine having a better life." (Barbara McClintock)
+
+Will try to add 2 NA ions and 0 CL ions.
+Select a continuous group of solvent molecules
+Selected 13: 'SOL'
+
+Processing topology
+Replacing 2 solute molecules in topology file (topol.top)  by 2 NA and 0 CL ions.

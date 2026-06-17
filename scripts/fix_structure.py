@@ -3,7 +3,7 @@ import sys
 import os
 from pdbfixer import PDBFixer
 from openmm.app import PDBFile
-
+from pathlib import Path
 
 def fix_missing_atoms(input_pdb, output_pdb, ph=7.4):
     """Uses PDBFixer to fill missing atoms and add hydrogens to the PDB file."""
@@ -12,11 +12,19 @@ def fix_missing_atoms(input_pdb, output_pdb, ph=7.4):
     
     
     fixer = PDBFixer(filename=input_pdb)
+
+    # mutations to original
+    fixer.findNonstandardResidues()
+    fixer.replaceNonstandardResidues()
+
+    # missing 
     fixer.findMissingResidues()
     fixer.findMissingAtoms()
     fixer.addMissingAtoms()
     fixer.addMissingHydrogens(pH=ph)
     try:
+        Path(output_pdb).parent.mkdir(exist_ok=True, parents=True)
+
         with open(output_pdb, 'w') as f:
             PDBFile.writeFile(fixer.topology, fixer.positions, f)
         print(f"Fixed missing atoms and saved cleaned file to: {output_pdb}")
