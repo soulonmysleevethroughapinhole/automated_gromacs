@@ -1,3 +1,7 @@
 # Protein list
-targets: ["7JPY", "7KPH", "8A55"]
-
+#targets: ["7JPY", "7KPH", "8A55"]
+targets:
+	7UU9:
+		length_ns: 100
+	7KPH:
+		length_ns: 500

@@ -29,7 +29,7 @@ WARNING 1 [file topol.top, line 43860]:
 
 checking input for internal consistency...
 
-Setting the LD random seed to -272646229
+Setting the LD random seed to -1623195729
 
 processing topology...
 
@@ -87,7 +87,7 @@ There were 2 NOTEs
 
 There was 1 WARNING
 
-GROMACS reminds you: "Ich war schwanger, mir gings zum kotzen" (Nina Hagen)
+GROMACS reminds you: "A program that has not been tested does not work." (Bjarne Stroustrup)
 
 
 processing coordinates...
@@ -138,13 +138,13 @@ Group    13 (            SOL) has 102660 elements
 Group    14 (      non-Water) has  4608 elements
 Select a group: Number of (3-atomic) solvent molecules: 34220
 
-Back Off! I just backed up topol.top to ./#topol.top.2#
-Using random seed 1021022143.
-Replacing solvent molecule 15879 (atom 52245) with NA
-Replacing solvent molecule 19359 (atom 62685) with NA
+Back Off! I just backed up topol.top to ./#topol.top.4#
+Using random seed 1806691974.
+Replacing solvent molecule 26402 (atom 83814) with NA
+Replacing solvent molecule 1507 (atom 9129) with NA
 
 
-GROMACS reminds you: "I never thought of stopping, and I just hated sleeping. I can't imagine having a better life." (Barbara McClintock)
+GROMACS reminds you: "I Wonder, Should I Get Up..." (J. Lennon)
 
 Will try to add 2 NA ions and 0 CL ions.
 Select a continuous group of solvent molecules

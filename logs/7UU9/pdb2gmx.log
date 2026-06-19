@@ -112,12 +112,14 @@ Opening force field file /usr/local/gromacs/share/gromacs/top/amber99sb-ildn.ff/
 Long Bond (680-682 = 0.734795 nm)
 Before cleaning: 12168 pairs
 Before cleaning: 12800 dihedrals
+
+Back Off! I just backed up posre.itp to ./#posre.itp.1#
 9 out of 9 lines of specbond.dat converted successfully
 Opening force field file /usr/local/gromacs/share/gromacs/top/amber99sb-ildn.ff/aminoacids.arn
 Opening force field file /usr/local/gromacs/share/gromacs/top/amber99sb-ildn.ff/dna.arn
 Opening force field file /usr/local/gromacs/share/gromacs/top/amber99sb-ildn.ff/rna.arn
 
-GROMACS reminds you: "Nullis in verba [Nobody's word is final]." (Motto of the Royal Society)
+GROMACS reminds you: "She Says She Can't Go Home Without a Chaperone" (E. Costello)
 
 Using the Amber99sb-ildn force field in directory amber99sb-ildn.ff
 
@@ -228,7 +230,7 @@ Command line:
   gmx editconf -f 7UU9_processed.gro -o 7UU9_newbox.gro -d 1.0 -bt cubic
 
 
-GROMACS reminds you: "I'd be Safe and Warm if I was in L.A." (The Mamas and the Papas)
+GROMACS reminds you: "This is Tense !" (Star Wars Episode I The Phantom Menace)
 
 Note that major changes are planned in future for editconf, to improve usability and utility.
 Read 4812 atoms
@@ -296,8 +298,8 @@ Number of solvent molecules:  34152
 
 Processing topology
 
-Back Off! I just backed up topol.top to ./#topol.top.1#
+Back Off! I just backed up topol.top to ./#topol.top.3#
 
-GROMACS reminds you: "People are DNA's way of making more DNA." (Edward O. Wilson)
+GROMACS reminds you: "I Can't Shake It" (Dinosaur Jr)
 
 Adding line for 34152 solvent molecules with resname (SOL) to topology file (topol.top)
