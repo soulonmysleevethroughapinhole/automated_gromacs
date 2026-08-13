@@ -1,7 +1,28 @@
 # Protein list
 #targets: ["7JPY", "7KPH", "8A55"]
-targets:
-	7UU9:
-		length_ns: 100
-	7KPH:
-		length_ns: 500
+
+#targets:
+#  7UU9:
+#    length_ns: 100
+#  7KPH:
+#    length_ns: 500
+
+# Target structures to pull and model
+pdbs:
+  - 7UU9
+
+# Prediction settings
+prediction_sources:
+  - alphafold
+  - colabfold
+
+# Total models generated per run (Standard ensemble size is 5)
+model_numbers: [1, 2, 3, 4, 5]
+
+# Alignment filtering parameters
+rmsd_min_threshold: 1.5  # Ensure models are structurally unique/divergent enough
+
+
+manual_prediction_dirs:
+  alphafold: data/manual_predictions/alphafold/
+  colabfold: data/manual_predictions/colabfold/
