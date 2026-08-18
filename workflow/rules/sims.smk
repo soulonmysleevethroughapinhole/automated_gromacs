@@ -9,46 +9,46 @@ rule all:
 
 
 # Rule to parse JSON/PKL files from prediction servers and store metadata
-rule extract_prediction_metadata:
-    input:
-        pdb_file = "data/predictions/{pdb}/{method}/{pdb}_{method}.pdb",
-        json_file = "data/predictions/{pdb}/{method}/scores.json" # Adjust name to match your files
-    output:
-        metrics = "results/predictions/{pdb}/{method}/quality_metrics.json"
-    run:
-        # Load prediction scores JSON
-        with open(input.json_file, "r") as f:
-            data = json.load(f)
-            
-        # Parse typical AlphaFold/ColabFold JSON structures
-        # (Note: keys may vary slightly depending on your exact version/tooling)
-        plddt_array = data.get("plddt") or data.get("max_predicted_aligned_error") # Colabfold/AF fallback
-        pae_matrix = data.get("pae") or data.get("predicted_aligned_error")
-        
-        metrics_summary = {
-            "pdb_code": wildcards.pdb,
-            "processing_type": wildcards.method,
-            "mean_plddt": float(np.mean(plddt_array)) if plddt_array else None,
-            "max_pae": float(np.max(pae_matrix)) if pae_matrix else None,
-            "mean_pae": float(np.mean(pae_matrix)) if pae_matrix else None
-        }
-        
-        # Save structured metadata summary
-        os.makedirs(os.path.dirname(output.metrics), exist_ok=True)
-        with open(output.metrics, "w") as out_f:
-            json.dump(metrics_summary, out_f, indent=4)
+#rule extract_prediction_metadata:
+#    input:
+#        pdb_file = "data/predictions/{pdb}/{method}/{pdb}_{method}.pdb",
+#        json_file = "data/predictions/{pdb}/{method}/scores.json" # Adjust name to match your files
+#    output:
+#        metrics = "results/predictions/{pdb}/{method}/quality_metrics.json"
+#    run:
+#        # Load prediction scores JSON
+#        with open(input.json_file, "r") as f:
+#            data = json.load(f)
+#            
+#        # Parse typical AlphaFold/ColabFold JSON structures
+#        # (Note: keys may vary slightly depending on your exact version/tooling)
+#        plddt_array = data.get("plddt") or data.get("max_predicted_aligned_error") # Colabfold/AF fallback
+#        pae_matrix = data.get("pae") or data.get("predicted_aligned_error")
+#        
+#        metrics_summary = {
+#            "pdb_code": wildcards.pdb,
+#            "processing_type": wildcards.method,
+#            "mean_plddt": float(np.mean(plddt_array)) if plddt_array else None,
+#            "max_pae": float(np.max(pae_matrix)) if pae_matrix else None,
+#            "mean_pae": float(np.mean(pae_matrix)) if pae_matrix else None
+#        }
+#        
+#        # Save structured metadata summary
+#        os.makedirs(os.path.dirname(output.metrics), exist_ok=True)
+#        with open(output.metrics, "w") as out_f:
+#            json.dump(metrics_summary, out_f, indent=4)
 
 # Rule 1:  Clean Protein
 # this may not be needed due to pdbfixer
-rule prepare_structure:
-	input:
-		#pdb = "data/proteins/empirical/sars_cov_2_wuhan/pdbs/{pdb}.pdb"
-		input_pdb = "data/proteins/empirical/sars_cov_2_wuhan/{pdb}/{pdb}.pdb"
-	output:
-		pdb_clean = "results/proteins/{pdb}/cleaned_protein.pdb",
-		#top = "results/{target}/topology.top"
-	shell: # NOTE: maybe pass input path
-		"python scripts/fix_structure.py {input.input_pdb} {output.pdb_clean}"
+#rule prepare_structure:
+#	input:
+#		#pdb = "data/proteins/empirical/sars_cov_2_wuhan/pdbs/{pdb}.pdb"
+#		input_pdb = "data/proteins/empirical/sars_cov_2_wuhan/{pdb}/{pdb}.pdb"
+#	output:
+#		pdb_clean = "results/proteins/{pdb}/cleaned_protein.pdb",
+#		#top = "results/{target}/topology.top"
+#	shell: # NOTE: maybe pass input path
+#		"python scripts/fix_structure.py {input.input_pdb} {output.pdb_clean}"
 
 # Rule 1.5: Optional step to add missing residues or loops using Modeller and PyRosett
 

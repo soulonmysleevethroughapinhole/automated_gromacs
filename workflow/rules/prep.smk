@@ -17,6 +17,7 @@ import shutil
 import urllib.request
 import zipfile 
 import numpy as np
+import re
 from pathlib import Path
 import subprocess
 
@@ -316,8 +317,8 @@ rule check_pred_archive:
 		manual_path = config.get("manual_prediction_dirs", {}).get(wildcards.source) + wildcards.pdb + f'/{wildcards.source}_{wildcards.pdb}_raw.zip'
 		if not manual_path:
 			raise WorkflowError(
-				f"No manual {wildcards.source} archive path configured. "
-				"Run the notebook, export the zip, and place it in the expected location."
+				f"No manual {wildcards.source} archive path configured. \n"
+				"Run the notebook, export the zip, and place it in the expected location. \n"
 			)
 		if not os.path.exists(manual_path):
 			raise WorkflowError(
@@ -417,15 +418,11 @@ rule check_pred_archive:
 #		shutil.copy(manual_path, output.zip_archive)
 
 
-
-
-
 # rule 5: reorganize files after extraction 
 rule extract_organize_models:
 	input:
 		#zip_archive = 'data/manual_predictions/{source}/{pdb}/{source}_{pdb}_raw.zip'
-		zip_archive = 'results/predictions_raw/{pdb}/{source}_raw.zip'
-
+		zip_archive = 'results/predictions_raw/{pdb}/{source}_raw.zip',
 	output:
 		models = expand("results/structures/{{pdb}}/{{source}}/model_{model_num}.pdb", model_num=MODELS),
 		metadata = 'results/structures/{pdb}/{source}/model_metadata.json'
@@ -434,36 +431,89 @@ rule extract_organize_models:
 		os.makedirs(out_dir, exist_ok=True)
 
 		# temporary unpacking directory
-		tmp_extract = f'results/predictions_raw/{wildcards.pdb}/{wildcards.source}_tmp'
+		tmp_extract = Path(f'results/predictions_raw/{wildcards.pdb}/{wildcards.source}_tmp')
+		tmp_extract.mkdir(parents=True, exist_ok=True)
+
 		with zipfile.ZipFile(input.zip_archive, 'r') as zip_ref:
 			zip_ref.extractall(tmp_extract)
 
-		# locate structures and map them to the correspponding model  numbers
-		# find model files recursively (handle nested folders inside the zip)
+		extracted_contents = list(tmp_extract.iterdir())
+		if len(extracted_contents) == 1 and extracted_contents[0].is_dir():
+			# ColabFold nested case: Point directly to the inner child folder
+			data_dir = extracted_contents[0]
+		else:
+			# AlphaFold flat case: Use the base temp directory itself
+			data_dir = tmp_extract
+
+		# locate structures, jsons and map them to the correspponding model numbers
+		# find model files and json files recursively (handle nested folders inside the zip)
 		found_models = []
-		for root, dirs, files in os.walk(tmp_extract):
-			for fname in files:
-				if fname.lower().endswith(('.pdb', '.cif')):
-					found_models.append(os.path.join(root, fname))
-		found_models = sorted(found_models)
+		json_files = []
+		# NOTE: OLD
+		#for root, dirs, files in os.walk(tmp_extract):
+		#	for fname in files:
+		#		lower = fname.lower()
+		#		if lower.endswith(('.pdb', '.cif')):
+		#			found_models.append(os.path.join(root, fname))
+		#		elif lower.endswith('.json'):
+		#			json_files.append(os.path.join(root, fname))
+		
+		# NOTE: NEW
+		# in case of alphafold result, the extracted folder has .cif as children which correspond to the found_models
+		# in case of colabfold result, the extracted tmp fld will have a .result folder as child, which contains the .pdb 
+		# -> the numbering of the models will be determined by the .pdb / .cif files,
+		# --> by regexing the string of the model, the full_data and scores can be extracted
+		# colabfold models are 1 indexed, while alphafold models are 0 indexed  
+		# from what I've seen, but ensure num of models checks out, and that if the numbering is shifted (in case of af, the model numbers should just be shifted by 1 to match the config numbering)
+
+		
+		for file in os.listdir(data_dir):
+			if wildcards.source == "alphafold":
+				str_ext = '.cif'
+			elif wildcards.source == "colabfold":
+				str_ext = '.pdb'
+			else:
+				raise WorkflowError(f"Unknown source {wildcards.source} for model extraction")
+
+			if file.lower().endswith(str_ext):
+				found_models.append(os.path.join(data_dir, file))
+			if file.lower().endswith('.json'):
+				json_files.append(os.path.join(data_dir, file))
+		found_models = sorted(found_models, key = lambda x: x.split('_model_')[1])
+		json_files = sorted(json_files)
+		
 
 		# map found model files to requested MODELS order; convert CIF -> PDB when needed
 		metrics_summary = {}
+		# placeholder for any top-level job/request info found in the archive
+		
+		job_request = None
+		for json_pth in json_files:
+			name = json_pth.lower()
+			if name.endswith('config.json') or name.endswith('job_request.json'):
+				job_request = json_pth
+				json_files.remove(json_pth)
+				break
+		#match wildcards.source:
+		#case 'alphafold':
+		#	job_request = '<>_job_request.json'
+
+		if job_request != None:
+			with open(job_request, 'r') as f:
+				metrics_summary['job_request'] = json.load(f)
+		else:
+			raise WorkflowError(f"No job_request.json or config.json found in archive {input.zip_archive}")	
 
 		if len(found_models) == 0:
 			raise WorkflowError(f"No model files (.pdb or .cif) found in archive {input.zip_archive}")
+		if len(found_models) != len(MODELS):
+			raise WorkflowError(f"Warning: Number of model files found ({len(found_models)}) does not match expected number ({len(MODELS)}) for {wildcards.source}/{wildcards.pdb}. Not proceeding with available models.")
 
 		for idx, model_num in enumerate(MODELS):
-			if idx >= len(found_models):
-				raise WorkflowError(
-					f"Not enough model files in archive for {wildcards.source}/{wildcards.pdb}: "
-					f"expected at least {len(MODELS)}, found {len(found_models)}"
-				)
-
 			src_path = found_models[idx]
+
 			orig_name = os.path.basename(src_path)
 			target_path = os.path.join(out_dir, f"model_{model_num}.pdb")
-
 			# ensure output directory exists
 			os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
@@ -476,26 +526,105 @@ rule extract_organize_models:
 					"--input", src_path,
 					"--output", target_path
 				])
-			else:
-				# fallback: move and force .pdb extension
-				shutil.move(src_path, target_path)
 
-			metrics_summary[f"model_{model_num}"] = {"original_file": orig_name}
-		
+			if wildcards.source == 'alphafold':
+				# Alphafold models are 0-indexed, so they should match the index directly
+				# Extract the model number from the filename to verify
+				#extracted_model_num = None
+
+				match = re.search(r"^(.*?)(?:_model_(\d+))$", Path(orig_name).stem)
+				#base_name = None
+				if match:
+					extracted_model_num = int(match.group(2))
+					base_name = match.group(1)
+					if extracted_model_num != idx:
+						raise WorkflowError(
+							f"Alphafold model numbering mismatch: expected model_{model_num} at index {idx}, "
+							f"but found {os.path.basename(src_path)}. Please check the archive."
+						)
+				else:
+					raise WorkflowError(f"Could not extract model number from filename {os.path.basename(src_path)} for Alphafold source.")
+
+				model_key = f"model_{model_num}"
+				metrics_summary[model_key] = {"original_file": orig_name}
+
+
+				# select the metadata file corresponding to this model
+				fd_target_stem = f"{base_name}_full_data_{extracted_model_num}"
+				matching_json = next(
+					(p for p in json_files if Path(p).stem == fd_target_stem), 
+					None
+				)
+				
+				if matching_json:
+					print(f"Found match: {matching_json}")
+					with open(matching_json, 'r') as f:
+						metrics_summary[model_key]['metadata_full_data'] = json.load(f)
+				else:
+					raise WorkflowError(f"No JSON found matching stem: {fd_target_stem} for Alphafold model {extracted_model_num}. Please check the archive.")
+					#print(f"No JSON found matching stem: {target_stem}")
+
+				sc_target_stem = f'{base_name}_summary_confidences_{extracted_model_num}' 
+				matching_json = next(
+					(p for p in json_files if Path(p).stem == sc_target_stem), 
+					None
+				)
+
+				if matching_json:
+					print(f"Found match: {matching_json}")
+					with open(matching_json, 'r') as f:
+						metrics_summary[model_key]['metadata_summary_confidences'] = json.load(f)
+				else:
+					raise WorkflowError(f"No JSON found matching stem: {sc_target_stem} for Alphafold model {extracted_model_num}. Please check the archive.")
+			elif wildcards.source == 'colabfold':
+				model_match = re.search(r"_model_(\d+)", Path(orig_name).stem)
+				extracted_model_num = int(model_match.group(1)) if model_match else None
+
+				match = re.search(r"^(.*?)_unrelaxed_(rank_.*)$", Path(orig_name).stem)
+
+				if match:
+					#extracted_model_num = int(match.group(2))
+					#base_name = match.group(1)
+					if extracted_model_num != model_num:
+						raise WorkflowError(
+							f"Colabfold model numbering mismatch: expected model_{model_num} at index {idx}, "
+							f"but found {os.path.basename(src_path)}. Please check the archive."
+						)
+
+					base_prefix = match.group(1)
+					shared_suffix = match.group(2)
+
+					expected_json_stem = f"{base_prefix}_scores_{shared_suffix}" 
+				else:
+					raise WorkflowError(f"Could not extract model number from filename {os.path.basename(src_path)} for Colabfold source.")
+
+				model_key = f"model_{model_num}"
+				metrics_summary[model_key] = {"original_file": orig_name}
+
+				# select the metadata file corresponding to this model
+				matching_json = next(
+					(p for p in json_files if Path(p).stem == expected_json_stem),
+					None
+				)
+
+				if matching_json:
+					print(f"Found match: {matching_json}")
+					with open(matching_json, 'r') as f:
+						metrics_summary[model_key]['metadata_scores'] = json.load(f)
+				else:
+					raise WorkflowError(f"No JSON found matching stem: {expected_json_stem} for Colabfold model {src_path}. Please check the archive.")
+			else:
+				raise WorkflowError(f"Unknown source {wildcards.source} for model extraction")
+
 		shutil.rmtree(tmp_extract)
 
-		with open(output.metadata, 'w') as meta_file:
-			json.dump(metrics_summary, meta_file, indent=4)
+		with open(output.metadata, 'w') as f:
+			json.dump(metrics_summary, 
+				f, 
+				indent=4,
+				sort_keys=True
+			)
 
-# rule 6: rmsd screening
-#checkpoint screen_structure:
-#	input:
-#		clean_empirical = 'results/structures/{pdb}/empirical/canonical_structure.pdb',
-#		predicted_model = "results/structures/{pdb}/{source}/model_{model_num}.pdb"
-#	output:
-#		report = "results/structures/{pdb}/{source}/model_{model_num}_evaluation.json"
-#	shell:
-#		"python scripts/screen_rmsd.py {input.clean_empirical} {input.predicted_model} {output.report}"
 
 
 # rule 6: rmsd screening
