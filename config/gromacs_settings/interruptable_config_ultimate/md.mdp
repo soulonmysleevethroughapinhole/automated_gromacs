@@ -2,7 +2,8 @@ cpp                 =  /usr/bin/cpp
 constraints         =  all-bonds
 ; Run parameters
 integrator              = md        ; leap-frog integrator
-nsteps                  = 50000000    ; 2 fs * 50000000 steps/ 1000 (fs/ps) = 100000 ps (100 ns)
+; nsteps                  = 50000000    ; 2 fs * 50000000 steps/ 1000 (fs/ps) = 100000 ps (100 ns)
+; nsteps                  = 5000    ; 2 fs * 5000 steps/ 1000 (fs/ps) = 10 ps (.01 ns)
 dt                      = 0.002     ; 2 fs
 ; Output control
 nstxout                 = 0         ; suppress bulky .trr file by specifying 

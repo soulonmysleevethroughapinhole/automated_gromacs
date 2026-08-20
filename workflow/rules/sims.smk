@@ -1,10 +1,10 @@
 # Final output of workflow, a 100nanosecond movie generated with PyMol
-rule all:
-	input:
-		#expand("results/{target}/plots/trajectory_analysis.png", target=config["targets"])
-		expand("results/{pdb}/movies/100ns_md_trajectory.mov", pdb=TARGETS, method=METHODS)
-		# Require the extracted metrics summary for every combination
-        expand("results/predictions/{pdb}/{method}/quality_metrics.json", pdb=TARGETS, method=METHODS),
+#rule all:
+#	input:
+#		#expand("results/{target}/plots/trajectory_analysis.png", target=config["targets"])
+#		expand("results/{pdb}/movies/100ns_md_trajectory.mov", pdb=TARGETS, method=METHODS),
+#		# Require the extracted metrics summary for every combination
+#		expand("results/predictions/{pdb}/{method}/quality_metrics.json", pdb=TARGETS, method=METHODS),
 		
 
 
@@ -51,18 +51,20 @@ rule all:
 #		"python scripts/fix_structure.py {input.input_pdb} {output.pdb_clean}"
 
 # Rule 1.5: Optional step to add missing residues or loops using Modeller and PyRosett
+# NOTE: this is done
 
 # Rule 1.66: Add hydrogens and energy minimize 
 
 # Rule 1.75: Prepare protein and  generate topology
 rule prepare_system:
 	input:
-		pdb_clean = "results/proteins/{pdb}/cleaned_protein.pdb",
+		#pdb_clean = "results/proteins/{pdb}/cleaned_protein.pdb",
+		pdb_file = "results/structures/{pdb}/{source}/{model_id}.pdb",
 	output:
-		gro_processed = "results/gromacs/{pdb}/md/{pdb}_processed.gro",
-		gro_box = "results/gromacs/{pdb}/md/{pdb}_newbox.gro",
-		gro_solv = "results/gromacs/{pdb}/md/{pdb}_solv.gro",
-		top = "results/gromacs/{pdb}/md/topol.top",
+		gro_processed = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/{pdb}_{source}_{model_id}_processed.gro",
+		gro_box       = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/{pdb}_{source}_{model_id}_newbox.gro",
+		gro_solv      = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/{pdb}_{source}_{model_id}_solv.gro",
+		top           = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/topol.top",
 	
 		#prepared_st = "results/gromacs/{target}/prepared.pdb"
 		#prepared_cg = "results/gromacs/{target}/prepared.pdb"
@@ -70,19 +72,19 @@ rule prepare_system:
 	params:
 		water = "tip3p",
 		ff = "amber99sb-ildn",
-		pdb_abs = lambda wildcards, input: os.path.abspath(input.pdb_clean),
+		pdb_abs = lambda wildcards, input: os.path.abspath(input.pdb_file),
 		# NOTE: maybe lambda basenames for output files
 	log:
-		"logs/{pdb}/pdb2gmx.log"
+		"logs/{pdb}/{source}/{model_id}/pdb2gmx.log"
 	shell:
 		"""
 		# absolute path of PDB
-		# PDB_ABS_path = $(readlink -f {input.pdb_clean})
+		# PDB_ABS_path = $(readlink -f {input.pdb_file})
 		# absolute path of log file
 		LOG_ABS=$(readlink -f {log})
 
-		mkdir -p results/gromacs/{wildcards.pdb}/md
-		cd results/gromacs/{wildcards.pdb}/md
+		mkdir -p results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns
+		cd results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns
 
 		gmx pdb2gmx -water {params.water} -ff {params.ff} -ignh \
 			-f {params.pdb_abs} \
@@ -97,21 +99,22 @@ rule prepare_system:
 # Rule 2.1 add ions to neutralize 
 rule add_ions:
 	input:
-		gro_solv = "results/gromacs/{pdb}/md/{pdb}_solv.gro",
-		top = "results/gromacs/{pdb}/md/topol.top",
+		gro_solv = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/{pdb}_{source}_{model_id}_solv.gro",
+		top = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/topol.top",
 		mdp = 'config/gromacs_settings/interruptable_config_ultimate/emw_steep.mdp'
 	output:
-		tpr_em = "results/gromacs/{pdb}/md/em_setup.tpr",
-		gro_ions = "results/gromacs/{pdb}/md/ion_b4em.gro",
+		tpr_em = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/em_setup.tpr",
+		gro_ions = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/ion_b4em.gro",
 	params:
 		mdp_abs = lambda wildcards, input: os.path.abspath(input.mdp)
 	log:
-		"logs/{pdb}/genion.log"
+		"logs/{pdb}/{source}/{model_id}/genion.log"
 	shell:
 		"""
 		LOG_ABS=$(readlink -f {log})
 
-		cd results/gromacs/{wildcards.pdb}/md
+		#cd results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns
+		cd $(dirname {output.gro_ions})
 
 		gmx grompp -v -f {params.mdp_abs} \
 			-c $(basename {input.gro_solv}) \
@@ -125,25 +128,24 @@ rule add_ions:
 # 3 st minimization
 rule minimize_steepest:
 	input:
-		gro_ions = "results/gromacs/{pdb}/md/ion_b4em.gro",
-		top = "results/gromacs/{pdb}/md/topol.top",
+		gro_ions = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/ion_b4em.gro",
+		top = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/topol.top",
 		mdp = 'config/gromacs_settings/interruptable_config_ultimate/emw_steep.mdp',
 
 	output:
-		gro_st = "results/gromacs/{pdb}/md/after_st.gro",
-		tpr_st = "results/gromacs/{pdb}/md/st.tpr",
-		trr_st = "results/gromacs/{pdb}/md/st.trr",
-		log_st = "results/gromacs/{pdb}/md/st.log",
+		gro_st = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/after_st.gro",
+		tpr_st = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/st.tpr",
+		trr_st = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/st.trr",
+		log_st = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/st.log",
 	params:
 		mdp_abs = lambda wildcards, input: os.path.abspath(input.mdp)
 	log:
-		"logs/{pdb}/gmx_mdrun_steep.log"
-
+		"logs/{pdb}/{source}/{model_id}/gmx_mdrun_steep.log"
 	shell:
 		"""
 		LOG_ABS=$(readlink -f {log})
 
-		cd results/gromacs/{wildcards.pdb}/md
+		cd results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns
 
 		gmx grompp -v -f {params.mdp_abs} \
 			-c $(basename {input.gro_ions}) \
@@ -158,23 +160,24 @@ rule minimize_steepest:
 #rule 4: cg minimization
 rule minimize_conjugate:
 	input:
-		gro_st = "results/gromacs/{pdb}/md/after_st.gro",
-		top = "results/gromacs/{pdb}/md/topol.top",
+		gro_st = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/after_st.gro",
+		top = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/topol.top",
 		mdp = 'config/gromacs_settings/interruptable_config_ultimate/emw_cg.mdp',
 	output:
-		tpr_cg = "results/gromacs/{pdb}/md/cg.tpr",
-		gro_cg = "results/gromacs/{pdb}/md/after_cg.gro",
-		trr_cg = "results/gromacs/{pdb}/md/cg.trr",
-		log_cg = "results/gromacs/{pdb}/md/cg.log",
+		tpr_cg = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/cg.tpr",
+		gro_cg = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/after_cg.gro",
+		trr_cg = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/cg.trr",
+		log_cg = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/cg.log",
 	params:
 		mdp_abs = lambda wildcards, input: os.path.abspath(input.mdp)
 	log:
-		"logs/{pdb}/gmx_mdrun_cg.log"
+		"logs/{pdb}/{source}/{model_id}/gmx_mdrun_cg.log"
 	shell:
 		"""
 		LOG_ABS=$(readlink -f {log})
 
-		cd results/gromacs/{wildcards.pdb}/md
+		# cd results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns
+		cd $(dirname {output.tpr_cg})
 
 		gmx grompp -v -f {params.mdp_abs} \
 			-c $(basename {input.gro_st}) \
@@ -190,17 +193,14 @@ rule minimize_conjugate:
 # Rule 5: Run 100n Molecular Dynamics
 rule run_molecular_dynamics:
 	input:
-		gro_cg = "results/gromacs/{pdb}/{proctype}/md_{length}_ns/after_cg.gro", # TODO: switch to accomodate length_ns and proctype for models
-		top = "results/gromacs/{pdb}/md/topol.top",
+		gro_cg = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/after_cg.gro",
+		top = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/topol.top",
 		mdp = "config/gromacs_settings/interruptable_config_ultimate/md.mdp",
 	output:
-		#gro_md = "results/gromacs/{pdb}/md/md.gro",
-		#xtc_md = "results/gromacs/{pdb}/md/md.xtc",
-		#tpr_md = "results/gromacs/{pdb}/md/md.tpr",
-		# sentinel method
-		done = 'results/gromacs/{pdb}/md/md_completed.txt'
+		# sentinel method (marks completion in the md_100ns folder)
+		done = 'results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt'
 	log:
-		"logs/{pdb}/production_mdrun.log"
+		"logs/{pdb}/{source}/{model_id}/production_mdrun.log"
 	#params:
 		#mdp_abs = lambda wildcards, input: os.path.abspath(input.mdp),
 		#log_abs = lambda wildcards, log: os.path.abspath(str(log))
@@ -209,19 +209,19 @@ rule run_molecular_dynamics:
 	run:
 		log_abs = os.path.abspath(str(log))
 		mdp_abs = os.path.abspath(str(input.mdp))
-		exec_dir = f"results/gromacs/{wildcards.pdb}/md"
+		exec_dir = f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns"
 		tpr_path = os.path.join(exec_dir, "md.tpr")
 		cpt_path = os.path.join(exec_dir, "md.cpt")
 		
 		# Compile the .tpr ONLY if it doesn't exist yet
 		if not os.path.exists(tpr_path):
 			shell("""
-				cd {exec_dir} 
+				cd {exec_dir}
 				gmx grompp -f {mdp_abs} \
-				-o $(basename {output.tpr_md}) \
-				-c $(basename {input.gro_cg}) \
-				-r $(basename {input.gro_cg}) \
-				-p $(basename {input.top}) -maxwarn 1 > {log_abs} 2>&1
+					-o md.tpr \
+					-c $(basename {input.gro_cg}) \
+					-r $(basename {input.gro_cg}) \
+					-p $(basename {input.top}) -maxwarn 1 > {log_abs} 2>&1
 			""")
 		
 		# Step B: Check for the presence of an active checkpoint file (.cpt)
@@ -230,14 +230,15 @@ rule run_molecular_dynamics:
 			print(f"TODO: edit naming to be descriptive of current work (pdb + origin) 🐍 [Snakemake] Active checkpoint detected. Resuming {wildcards.pdb}...🐍")
 
 			shell("""
-				cd {exec_dir} 
+				cd {exec_dir}
 				gmx mdrun -v -ntmpi 1 \
 				-deffnm md \
 				-cpi $(basename {cpt_path}) \
 				-nb gpu -pme gpu >> {log_abs} 2>&1
 			""")
 		else:
-			print(f"🐍 [Snakemake] Launching fresh execution tree for {wildcards.pdb}...🐍")
+			print(f"🐍 [Snakemake] Launching fresh execution tree for {wildcards.pdb} {wildcards.source} {wildcards.model_id}...🐍")
+
 			shell("""
 				cd {exec_dir}
 				gmx mdrun -v -ntmpi 1 \
@@ -261,44 +262,44 @@ rule run_molecular_dynamics:
 # --- STEP 6: TRAJECTORY CLEANING & PBC WRAPPING CORRECTION ---
 rule pbc_correction_and_extract:
 	input:
-		md_checkpoint_guard = "results/gromacs/{pdb}/md/md_completed.txt",
-		xtc_md = "results/gromacs/{pdb}/md/md.xtc",
-		tpr_md = "results/gromacs/{pdb}/md/md.tpr",
+		md_checkpoint_guard = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt",
+		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md.xtc",
+		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md.tpr",
 	output:
-		tar = "results/gromacs/{pdb}/md/FRAMES_compressed.tar.gz"
+		tar = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/FRAMES_compressed.tar.gz"
 	log:
-		"logs/{pdb}/trjconv_pbc.log"
+		"logs/{pdb}/{source}/{model_id}/trjconv_pbc.log"
 	shell:
 		"""
 		# 1. Recenter molecular unity boundaries
-		echo "Protein" | gmx trjconv -f {input.xtc_md} -s {input.tpr_md} -o results/{wildcards.pdb}/md_whole.xtc -pbc mol -ur compact > {log} 2>&1
+		echo "Protein" | gmx trjconv -f {input.xtc_md} -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc -pbc mol -ur compact > {log} 2>&1
 		
 		# 2. Fit rotational and translational structural drift
-		echo "Protein Protein Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/md/md_whole.xtc -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/md/md_clean.xtc -center -fit rot+trans >> {log} 2>&1
+		echo "Protein Protein Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc -center -fit rot+trans >> {log} 2>&1
 		
 		# 3. Chop trajectory into individual PDB frames
-		mkdir -p results/{wildcards.pdb}/FRAMES
-		echo "Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/md/md_clean.xtc -o results/gromacs/{wildcards.pdb}/md/FRAMES/frame.pdb -s {input.tpr_md} -sep >> {log} 2>&1
+		mkdir -p results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/FRAMES
+		echo "Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/FRAMES/frame.pdb -s {input.tpr_md} -sep >> {log} 2>&1
 		
 		# Compress and archive individual coordinate files
-		tar -czf {output.tar} -C results/{wildcards.pdb} FRAMES >> {log} 2>&1
+		tar -czf {output.tar} -C results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id} FRAMES >> {log} 2>&1
 		
 		# Clean up massive intermediate trajectories to preserve space
-		# rm -f results/{wildcards.pdb}/md_whole.xtc results/{wildcards.pdb}/md_clean.xtc
+		# rm -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc
 		"""
 
 
 # --- STEP 7: AUTOMATED PYMOL MOVIE GENERATION ---
 rule generate_pymol_movie:
 	input:
-		tar = "results/gromacs/{pdb}/md/FRAMES_compressed.tar.gz"
+		tar = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/FRAMES_compressed.tar.gz"
 	output:
-		movie = "results/{pdb}/movies/100ns_md_trajectory.mov"
+		movie = "results/gromacs/{pdb}/{source}/{model_id}/movies/100ns_md_trajectory.mov"
 	log:
-		"logs/{pdb}/pymol_render.log"
+		"logs/{pdb}/{source}/{model_id}/pymol_render.log"
 	shell:
 		"python scripts/render_pymol_movie.py {input.tar} {output.movie} > {log} 2>&1"
-        
+		
 # Rule 4: Run Quantum Mechanical / Excited-State Calculations on Snapshots
 # rule run_quantum_mechanics:
 	# input:

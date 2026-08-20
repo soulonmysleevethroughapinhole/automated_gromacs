@@ -7,6 +7,10 @@
 #  7KPH:
 #    length_ns: 500
 
+#####################################
+###### PDBs to prep and screen ######
+#####################################
+
 # Target structures to pull and model
 pdbs:
   - 7UU9
@@ -22,7 +26,23 @@ model_numbers: [1, 2, 3, 4, 5]
 # Alignment filtering parameters
 rmsd_min_threshold: 1.5  # Ensure models are structurally unique/divergent enough
 
-
 manual_prediction_dirs:
   alphafold: data/manual_predictions/alphafold/
   colabfold: data/manual_predictions/colabfold/
+
+#####################################
+###### MD logic overrides
+###### - for < threshold screens
+###### - for long runs
+###### - for specialty requests like simulated annelation
+#####################################
+
+## Overrides for specific target runs
+#custom_simulations:
+#  7UU9:
+#    empirical_canonical_structure:
+#      - protocol: "simulated_annealing"
+#    alphafold_model_1:
+#      - protocol: 'standard' 
+#      - protocol: "extended"
+#       target_ns: 1000

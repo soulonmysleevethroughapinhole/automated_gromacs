@@ -14,35 +14,79 @@ configfile: "config/config.yaml"
 # Include the preparation pipeline rules
 include: "rules/prep.smk"
 
+# Include the MD sim rules
+include: "rules/sims.smk"
+
+# Helper to resolve protocol paths based on config overrides
+def resolve_targets(pdb, source, model):
+	target_key = f"{source}_{model}"
+	custom_jobs = config.get("custom_simulations", {}).get(pdb, {}).get(target_key, [])
+
+	# Default behavior: If no custom jobs requested, queue standard 100ns baseline
+	if not custom_jobs:
+		return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"]
+	
+	job_paths = []
+	for job in custom_jobs:
+		#protocol = job.get("protocol", "standard)
+		#protocol = job.get("protocol", None)
+		protocol = job["protocol"]
+		
+		if protocol == "extended":
+			length = job.get("target_ns", 1000)
+			path = f"results/md/{pdb}/{source}/{model}/extended_{length}ns/md_completed.txt"
+		elif protocol == "simulated_annealing":
+			path = f"results/md/{pdb}/{source}/{model}/simulated_annealing/md_completed.txt"
+		elif protocol == "standard":  # "standard"
+			#path = f"results/md/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
+			path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
+			
+		job_paths.append(path)
+		
+	return job_paths
+	
 # DYNAMIC ROUTING FUNCTION
 # This function will dynamically determine the final targets for the Snakemake DAG based on the evaluation of the predicted models against the empirical structures. It checks if the predicted models are structurally divergent enough to warrant further processing (e.g., MD simulations) or if they should be rejected.
 def get_final_targets(wildcards):
-    targets = []
-    
-    for pdb in config["pdbs"]:
-        # 1. Always schedule the empirical (native) structure for MD
-        targets.append(f"results/gromacs/{pdb}/empirical/native/md/md_completed.txt")
-        targets.append(f"results/{pdb}_empirical_native/movies/100ns_md_trajectory.mov")
-        
-        for source in config["prediction_sources"]:
-            # 2. Force Snakemake to wait until the checkpoint finishes processing
-            checkpoint_dir = checkpoints.evaluate_predictions.get(pdb=pdb, source=source).output.eval_dir
-            
-            # 3. Inspect JSON files to filter out "too_similar" models
-            for json_file in os.listdir(checkpoint_dir):
-                if json_file.endswith(".json"):
-                    with open(os.path.join(checkpoint_dir, json_file)) as f:
-                        eval_data = json.load(f)
-                    
-                    if eval_data["structural_evaluation"] == "divergent":
-                        model_spec = eval_data["model"] # e.g., "model_1"
-                        
-                        # Add MD targets only for compliant models
-                        targets.append(f"results/gromacs/{pdb}/{source}/{model_spec}/md/md_completed.txt")
-                        targets.append(f"results/{pdb}_{source}_{model_spec}/movies/100ns_md_trajectory.mov")
-                        
-    return targets
+	targets = []
+	
+	for pdb in config["pdbs"]:
+		# 1. EMPIRICAL TARGETS (Evaluated directly per PDB)
+		targets.extend(resolve_targets(pdb, "empirical", "canonical_structure"))
+
+		# 1. Always schedule the empirical (native) structure for MD
+		#targets.append(f"results/gromacs/{pdb}/empirical/native/md/md_completed.txt")
+		#targets.append(f"results/{pdb}_empirical_native/movies/100ns_md_trajectory.mov")
+		#targets.append(f'results/md/{pdb}/empirical/canonical_structure/standard_100ns/md_completed.txt')
+
+		for source in config["prediction_sources"]:
+			# 2. Force Snakemake to wait until the checkpoint finishes processing
+			checkpoint_dir = checkpoints.evaluate_predictions.get(pdb=pdb, source=source).output.eval_dir
+			
+			# 3. Inspect JSON files to filter out "too_similar" models
+			for json_file in os.listdir(checkpoint_dir):
+				if json_file.endswith(".json"):
+					with open(os.path.join(checkpoint_dir, json_file)) as f:
+						eval_data = json.load(f)
+					
+					model_id = eval_data["model"] # e.g., "model_1"
+					target_key = f"{source}_{model_id}"
+
+					is_divergent = (eval_data.get("structural_evaluation") == "divergent")						
+					has_explicit_override = target_key in config.get("custom_simulations", {}).get(pdb, {})
+
+					if has_explicit_override or is_divergent:
+						targets.extend(resolve_targets(pdb, source, model_id))
+
+						# Add MD targets only for compliant models
+						#targets.append(f"results/gromacs/{pdb}/{source}/{model_spec}/md/md_completed.txt")
+						#targets.append(f"results/{pdb}_{source}_{model_spec}/movies/100ns_md_trajectory.mov")
+		# 4. Check overrides for <pdb>
+		#overrides = config.get("custom_simulations", {}).get(pdb, [])
+
+		
+	return targets
 
 rule all:
-    input:
-        get_final_targets
+	input:
+		get_final_targets

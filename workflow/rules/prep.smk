@@ -7,8 +7,8 @@
 # template similarity to empirical structure will also be collected, for further analysis
 #TARGETS = ['7UU9']
 #SOURCES = ['empirical', 'alphafold', 'colabfold']
-TARGETS = config.get("pdbs")#, ["7UU9"])
-SOURCES = config.get("prediction_sources")#, ["alphafold", "colabfold"])
+#TARGETS = config.get("pdbs")#, ["7UU9"])
+#SOURCES = config.get("prediction_sources")#, ["alphafold", "colabfold"])
 MODELS = config.get("model_numbers", [1, 2, 3, 4, 5])
 
 import json
@@ -22,28 +22,28 @@ from pathlib import Path
 import subprocess
 
 
-def aggregate_md_inputs(wildcards):
-	resolved_paths = []
-	
-	# Loop over your targets inside the function
-	for pdb in TARGETS:
-		# 1. Force Snakemake to wait by explicitly passing the target name to the checkpoint
-		checkpoint_output = checkpoints.screen_structure.get(pdb=pdb).output.report
-		
-		# 2. Read the evaluation data for this specific PDB
-		with open(checkpoint_output) as f:
-			data = json.load(f)
-		
-		# 3. Append the correct path to the master list based on structural compliance
-		if data["rmsd"] < config["max_allowed_rmsd"]:
-			# Target passed! Route it to the production pipeline
-			target_length = config["targets"][pdb]["length_ns"]
-			resolved_paths.append(f"results/2_simulations/{pdb}/{target_length}ns/md.gro")
-		else:
-			# Target failed! Route it to an alternative terminal endpoint
-			resolved_paths.append(f"results/1_predicted_models/rejected_{pdb}.txt")
-			
-	return resolved_paths
+#def aggregate_md_inputs(wildcards):
+#	resolved_paths = []
+#	
+#	# Loop over your targets inside the function
+#	for pdb in TARGETS:
+#		# 1. Force Snakemake to wait by explicitly passing the target name to the checkpoint
+#		checkpoint_output = checkpoints.screen_structure.get(pdb=pdb).output.report
+#		
+#		# 2. Read the evaluation data for this specific PDB
+#		with open(checkpoint_output) as f:
+#			data = json.load(f)
+#		
+#		# 3. Append the correct path to the master list based on structural compliance
+#		if data["rmsd"] < config["max_allowed_rmsd"]:
+#			# Target passed! Route it to the production pipeline
+#			target_length = config["targets"][pdb]["length_ns"]
+#			resolved_paths.append(f"results/2_simulations/{pdb}/{target_length}ns/md.gro")
+#		else:
+#			# Target failed! Route it to an alternative terminal endpoint
+#			resolved_paths.append(f"results/1_predicted_models/rejected_{pdb}.txt")
+#			
+#	return resolved_paths
 
 #def aggregate_md_inputs(wildcards):
 #    # 1. Force Snakemake to wait for the checkpoint to complete and evaluate
