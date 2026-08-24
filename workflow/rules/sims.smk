@@ -167,6 +167,12 @@ rule minimize_conjugate:
 			-g $(basename {output.log_cg}) >> {params.log_abs} 2>&1
 		"""
 
+# NOTE:
+# NOTE: Maybe scheduling is not necessary!!!
+# NOTE: it's possible to just ssh into the server when md is ran and thats it
+# NOTE: there'd just need to be a step to check if it's on the server first, if not 
+# NOTE: then package the JOB folder, and run
+# NOTE:
 # decide whether to submit job to HPC or run locally, based on environment variable
 rule schedule_md_job:
 	input:
