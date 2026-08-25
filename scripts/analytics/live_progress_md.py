@@ -13,122 +13,163 @@ TOTAL_STEPS = int((TOTAL_NS * 1000) / DT_PS)  # 50,000,000 steps
 def parse_md_logs():
     table = Table(title="Live GROMACS MD Simulation Tracker (100 ns Runs)")
     table.add_column("System / Replicate", style="cyan")
-    table.add_column("Start Time", style="dim white")
+    table.add_column("First Started", style="bold blue")
+    table.add_column("Last Active", style="dim white")
     table.add_column("Sim Time", style="green")
     table.add_column("Progress", style="yellow")
     table.add_column("Performance", style="magenta")
-    #table.add_column("ETA", style="bold bold_yellow" if True else "white")
     table.add_column("ETA", style="bold yellow")
-    log_files = glob.glob("results/gromacs/*/*/*/standard_100ns/JOB/*_md.log") + \
-                glob.glob("logs/*/*/*/*_md.log")
-    
-    for log in sorted(log_files):
+
+    step_logs = sorted(glob.glob("results/gromacs/*/*/*/standard_100ns/simulation_steps.log"))
+
+    if not step_logs:
+        table.add_row("No simulations found", "-", "-", "-", "-", "-", "-")
+        return table
+
+    for log_path in step_logs:
         try:
-            with open(log, "r", encoding="utf-8", errors="ignore") as f:
-                lines = f.readlines()
-            
+            with open(log_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = [line.strip() for line in f if line.strip()]
+
             if not lines:
                 continue
 
-            # 1. Determine Start Time from GROMACS header log or file creation
-            start_time = None
-            for line in lines[:50]:  # GROMACS prints log start header near the top
-                match = re.search(r"Log file opened on (.*)", line)
-                if match:
-                    try:
-                        start_time = datetime.strptime(match.group(1).strip(), "%a %b %d %H:%M:%S %Y")
-                    except ValueError:
-                        pass
-                    break
-            
-            # Fallback to file creation time if string parsing missed
-            if not start_time:
-                start_time = datetime.fromtimestamp(os.path.getctime(log))
-
-            start_str = start_time.strftime("%b %d %H:%M")
-
-            # 2. Collect Checkpoint Timestamps for Step Rate Calculation
-            checkpoints = []
-            for line in reversed(lines[-200:]): # Look through recent buffer
-                match = re.search(r"Writing checkpoint, step (\d+) at (.*)", line)
-                if match:
-                    step_val = int(match.group(1))
-                    time_str = match.group(2).strip()
-                    try:
-                        parsed_time = datetime.strptime(time_str, "%a %b %d %H:%M:%S %Y")
-                        checkpoints.append((step_val, parsed_time))
-                    except ValueError:
-                        continue
-                if len(checkpoints) >= 2:  # Need at least two points to compute performance
-                    break
-
-            if not checkpoints:
-                # No checkpoints written yet
-                parts = log.split("/")
-                idx = parts.index("results") if "results" in parts else 0
-                name = f"{parts[idx+2]}/{parts[idx+3]}/{parts[idx+4]}" if "results" in parts else log
-                table.add_row(name, start_str, "0.0 / 100 ns", "0.0%", "Starting...", "N/A")
-                continue
-
-            # Latest step data
-            latest_step, latest_time = checkpoints[0]
-            sim_ps = latest_step * DT_PS
-            sim_ns = sim_ps / 1000.0
-            pct = (latest_step / TOTAL_STEPS) * 100.0
-
-            # 3. Calculate Performance (ns/day) and ETA
-            if len(checkpoints) >= 2:
-                prev_step, prev_time = checkpoints[1]
-                step_delta = latest_step - prev_step
-                time_delta_sec = (latest_time - prev_time).total_seconds()
-            else:
-                # Fallback to total run time if only 1 checkpoint exists
-                step_delta = latest_step
-                time_delta_sec = (latest_time - start_time).total_seconds()
-
-            if time_delta_sec > 0 and step_delta > 0:
-                ns_per_sec = (step_delta * DT_PS / 1000.0) / time_delta_sec
-                ns_per_day = ns_per_sec * 86400.0
-                
-                remaining_ns = TOTAL_NS - sim_ns
-                remaining_sec = remaining_ns / ns_per_sec if ns_per_sec > 0 else 0
-                
-                eta_dt = datetime.now() + timedelta(seconds=remaining_sec)
-                
-                # Format ETA: Show time if today, else include date
-                if eta_dt.date() == datetime.now().date():
-                    eta_str = eta_dt.strftime("Today at %H:%M")
-                else:
-                    eta_str = eta_dt.strftime("%b %d %H:%M")
-                
-                perf_str = f"{ns_per_day:.1f} ns/day"
-            else:
-                perf_str = "Calculating..."
-                eta_str = "N/A"
-
-            # Parse path identifier
-            parts = log.split("/")
+            parts = log_path.split("/")
             if "results" in parts:
                 idx = parts.index("results")
                 name = f"{parts[idx+2]}/{parts[idx+3]}/{parts[idx+4]}"
             else:
-                name = log
+                name = log_path
+
+            # 1. First Start Time (earliest INIT / log creation)
+            first_line = lines[0]
+            first_match = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", first_line)
+            if first_match:
+                first_start_dt = datetime.strptime(first_match.group(1), "%Y-%m-%d %H:%M:%S")
+            else:
+                first_start_dt = datetime.fromtimestamp(os.path.getctime(log_path))
+            first_start_str = first_start_dt.strftime("%b %d %H:%M")
+
+            # 2. Last Active Time (timestamp of the most recent logged event)
+            latest_line = lines[-1]
+            last_match = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", latest_line)
+            if last_match:
+                last_active_dt = datetime.strptime(last_match.group(1), "%Y-%m-%d %H:%M:%S")
+            else:
+                last_active_dt = datetime.fromtimestamp(os.path.getmtime(log_path))
+            last_active_str = last_active_dt.strftime("%b %d %H:%M")
+
+            # 3. Parse latest step status
+            step_match = re.search(r"\[STEP:\s*([^\]]+)\]\s*(.*)", latest_line)
+            step_code = step_match.group(1) if step_match else "UNKNOWN"
+            step_details = step_match.group(2) if step_match else ""
+
+            # 4. Parse Checkpoints for Performance & Step Rate
+            sim_dir = os.path.dirname(log_path)
+            gmx_logs = [
+                f for f in glob.glob(os.path.join(sim_dir, "*.log")) + glob.glob(os.path.join(sim_dir, "JOB", "*.log"))
+                if os.path.basename(f) != "simulation_steps.log"
+            ]
+
+            checkpoints = []
+            if gmx_logs:
+                for glog in gmx_logs:
+                    try:
+                        with open(glog, "r", encoding="utf-8", errors="ignore") as gf:
+                            glines = gf.readlines()
+                        for line in reversed(glines[-200:]):
+                            match = re.search(r"Writing checkpoint, step (\d+) at (.*)", line)
+                            if match:
+                                step_val = int(match.group(1))
+                                time_str = match.group(2).strip()
+                                try:
+                                    parsed_time = datetime.strptime(time_str, "%a %b %d %H:%M:%S %Y")
+                                    checkpoints.append((step_val, parsed_time))
+                                except ValueError:
+                                    continue
+                            if len(checkpoints) >= 2:
+                                break
+                    except Exception:
+                        pass
+                    if checkpoints:
+                        break
+
+            # 5. Row Construction & Metric Formatting
+            if step_code in ["DONE", "SIMULATION_SUMMARY"]:
+                sim_time_str = "100.0 / 100 ns"
+                progress_str = "100.0%"
+                perf_str = "Finished"
+                eta_str = "Done"
+
+            elif checkpoints:
+                latest_step, latest_time = checkpoints[0]
+                sim_ps = latest_step * DT_PS
+                sim_ns = sim_ps / 1000.0
+                pct = min(100.0, (latest_step / TOTAL_STEPS) * 100.0)
+
+                if len(checkpoints) >= 2:
+                    prev_step, prev_time = checkpoints[1]
+                    step_delta = latest_step - prev_step
+                    time_delta_sec = (latest_time - prev_time).total_seconds()
+                else:
+                    step_delta = latest_step
+                    time_delta_sec = (latest_time - last_active_dt).total_seconds()
+
+                if time_delta_sec > 0 and step_delta > 0:
+                    ns_per_sec = (step_delta * DT_PS / 1000.0) / time_delta_sec
+                    ns_per_day = ns_per_sec * 86400.0
+                    remaining_ns = max(0.0, TOTAL_NS - sim_ns)
+                    remaining_sec = remaining_ns / ns_per_sec if ns_per_sec > 0 else 0
+                    
+                    eta_dt = datetime.now() + timedelta(seconds=remaining_sec)
+                    if eta_dt.date() == datetime.now().date():
+                        eta_str = eta_dt.strftime("Today at %H:%M")
+                    else:
+                        eta_str = eta_dt.strftime("%b %d %H:%M")
+                    perf_str = f"{ns_per_day:.1f} ns/day"
+                else:
+                    perf_str = "Calculating..."
+                    eta_str = "N/A"
+
+                sim_time_str = f"{sim_ns:.2f} / {TOTAL_NS:.0f} ns"
+                progress_str = f"{pct:.1f}%"
+
+            else:
+                sim_time_str = "0.0 / 100 ns"
+                progress_str = "0.0%"
+
+                if "SLURM" in step_code or "EXEC_MODE" in step_code:
+                    job_id_match = re.search(r"ID:?\s*(\d+)", step_details, re.IGNORECASE)
+                    job_str = f"Job {job_id_match.group(1)}" if job_id_match else "Queued"
+                    perf_str = f"HPC ({job_str})"
+                    eta_str = "Running on HPC"
+                elif step_code == "RETRIEVE_START":
+                    perf_str = "Syncing"
+                    eta_str = "Downloading..."
+                elif step_code == "ERROR":
+                    perf_str = "FAILED"
+                    eta_str = "Check Log"
+                else:
+                    perf_str = "Initializing"
+                    eta_str = "Starting..."
 
             table.add_row(
                 name,
-                start_str,
-                f"{sim_ns:.2f} / {TOTAL_NS:.0f} ns",
-                f"{pct:.1f}%",
+                first_start_str,
+                last_active_str,
+                sim_time_str,
+                progress_str,
                 perf_str,
                 eta_str
             )
+
         except Exception:
             continue
-            
+
     return table
 
 if __name__ == "__main__":
-    with Live(parse_md_logs(), refresh_per_second=1) as live:
+    with Live(parse_md_logs(), refresh_per_second=0.1) as live:
         while True:
-            time.sleep(3)
+            time.sleep(30)
             live.update(parse_md_logs())

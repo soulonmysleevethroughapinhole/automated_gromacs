@@ -41,10 +41,14 @@ manual_prediction_dirs:
 ###### - for specialty requests like simulated annelation
 #####################################
 
+
+
 ## Overrides for specific target runs
-#custom_simulations:
-#  7UU9:
-#    empirical_canonical_structure:
+custom_simulations:
+  7UU9:
+    empirical_canonical_structure:
+      - protocol: 'standard'
+        compute_target: "HPC"
 #      - protocol: "simulated_annealing"
 #      - compute_target: "local"
 #    alphafold_model_1:

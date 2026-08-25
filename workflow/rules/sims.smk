@@ -5,10 +5,19 @@ import yaml
 from dotenv import load_dotenv
 load_dotenv() # Load environment variables from .env file
 
+import logging
+import sys
+import traceback
+import re
+import subprocess
+import time
+
 HPC_HOST = os.getenv("HPC_HOST")
 HPC_USER = os.getenv("HPC_USER")
+HPC_ACCOUNT = os.getenv("HPC_ACCOUNT")
 HPC_REMOTE_BASE = os.getenv("HPC_REMOTE_BASE")
 HPC_PARTITION = os.getenv("HPC_PARTITION")
+HPC_GMX_HOME = os.getenv("HPC_GMX_HOME")
 HPC_TIME = os.getenv("HPC_TIME")
 SUBMIT_HPC = os.getenv("SUBMIT_HPC", "0")
 SSH_DAEMON_PORT = os.getenv("SSH_DAEMON_PORT", "22")  # Default to port 22 if not set
@@ -171,7 +180,7 @@ rule minimize_conjugate:
 # NOTE: Maybe scheduling is not necessary!!!
 # NOTE: it's possible to just ssh into the server when md is ran and thats it
 # NOTE: there'd just need to be a step to check if it's on the server first, if not 
-# NOTE: then package the JOB folder, and run
+# NOTE: then package the JOB folder, and tf it to server and extract to run the mdrun .jobSS
 # NOTE:
 # decide whether to submit job to HPC or run locally, based on environment variable
 rule schedule_md_job:
@@ -194,8 +203,15 @@ rule schedule_md_job:
 	run:
 		def_compute_target = config.get("default_compute_target", "local")
 		# get target from config for this PDB, or use default
-		pdb_config = config.get("custom_simulations", {}).get(wildcards.pdb, {})
+		pdb_config_entries = config.get("custom_simulations", {})\
+						.get(wildcards.pdb, {})\
+						.get(f'{wildcards.source}_{wildcards.model_id}', [])
+
+		current_protocol = "standard"
+		pdb_config = next((entry for entry in pdb_config_entries if entry.get("protocol") == current_protocol), {})
+
 		compute_target = pdb_config.get("compute_target", def_compute_target)
+		#compute_target = pdb_config.get("compute_target", None)
 		work_dir = os.path.dirname(output.scheduling)
 		os.makedirs(work_dir, exist_ok=True)
 
@@ -238,234 +254,391 @@ rule schedule_md_job:
 # create molecular dynamics job, which can be submitted komondor HPC later, or run locally. 
 rule create_md_job:
 	input:
-		#gro_cg = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/after_cg.gro",
-		#top = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/topol.top",
-		#mdp = "config/gromacs_settings/interruptable_config_ultimate/md.mdp",
 		scheduling = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/scheduling.yml"
 	output:
 		job_description = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md_job.job"
 	log:
-		"logs/{pdb}/{source}/{model_id}/create_md_job.log",
+		"logs/{pdb}/{source}/{model_id}/create_md_job.log"
 	params:
-		#log_abs = lambda log: os.path.abspath(str(log))
+		#log_abs = lambda wildcards, log: os.path.abspath(str(log))
 		log_abs = lambda wildcards: os.path.abspath(
 			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/create_md_job.log"
 		)
 	run:
+		# 1. Setup Isolated Logger
+		log_path = params.log_abs
+		os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-		with open(input.scheduling, 'r') as f:
-			scheduling_info = yaml.load(f, Loader=yaml.FullLoader)
+		logger = logging.getLogger(f"create_md_job_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}")
+		logger.setLevel(logging.INFO)
+		logger.handlers.clear()  # Prevent duplicate handlers on re-runs
 
-		if scheduling_info.get("COMPUTE") == "local":
-			print(f"🐍 [Snakemake] No scheduling for local jobs - {wildcards.pdb} {wildcards.source} {wildcards.model_id} to run locally...🐍")
-			with open(output.job_description, 'w') as f:
-				f.write('BLANK')
+		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
-		elif scheduling_info.get("COMPUTE") == "HPC":
-			submit_hpc = SUBMIT_HPC == '1'
+		# File Handler
+		fh = logging.FileHandler(log_path, mode="w")
+		fh.setFormatter(fmt)
+		logger.addHandler(fh)
 
-			if not submit_hpc:
-				print(f"🐍 [Snakemake] HPC submission disabled. Job for {wildcards.pdb} {wildcards.source} {wildcards.model_id} will be created but not submitted.🐍")
-				raise ValueError("HPC submission is disabled. Set SUBMIT_HPC=1 in .env to enable submission.")
+		# Console Handler
+		ch = logging.StreamHandler()
+		ch.setFormatter(fmt)
+		logger.addHandler(ch)
 
-			print(f"🐍 [Snakemake] Creating job for {HPC_USER} - {wildcards.pdb} {wildcards.source} {wildcards.model_id} to run on HPC...🐍")
+		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}"
+		logger.info("Initializing MD job creation for target: %s", target_id)
 
-			job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
-			script_path = os.path.abspath(output.job_description)
+		try:
+			# 2. Parse Scheduling Data
+			if not os.path.exists(input.scheduling):
+				raise FileNotFoundError(f"Scheduling file not found at {input.scheduling}")
 
-			deffnm = f'{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md'
-			content = f"""#!/bin/bash
+			with open(input.scheduling, "r") as f:
+				scheduling_info = yaml.load(f, Loader=yaml.FullLoader) or {}
+
+			compute_target = scheduling_info.get("COMPUTE")
+			logger.info("Parsed compute target: '%s'", compute_target)
+
+			# 3. Handle Local Target
+			if compute_target == "local":
+				logger.info("Local execution target confirmed for %s. Writing placeholder job script.", target_id)
+				os.makedirs(os.path.dirname(output.job_description), exist_ok=True)
+				with open(output.job_description, "w") as f:
+					f.write("BLANK\n")
+				logger.info("Placeholder job script created: %s", output.job_description)
+
+			# 4. Handle HPC Target
+			elif compute_target == "HPC":
+				submit_hpc = str(SUBMIT_HPC).strip() == "1"
+
+				if not submit_hpc:
+					logger.error("HPC submission is disabled in environment (SUBMIT_HPC=%s).", SUBMIT_HPC)
+					raise ValueError(f"HPC submission disabled for {target_id}. Set SUBMIT_HPC=1 in .env to enable.")
+
+				job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
+				script_path = os.path.abspath(output.job_description)
+				deffnm = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+
+				# Generate Slurm Batch Script
+				slurm_script = f"""#! /bin/bash
+# Komondor Slurm Template for Gromacs 2025.4 (Compiled: MPI noCUDA)
+# Run: CPU, MPI
+# KV
+
 #SBATCH --job-name={job_name}
-#SBATCH --output={job_name}_%j.out
+#SBATCH --output={deffnm}_%j.out
+#SBATCH --error={deffnm}_%j.err
+#SBATCH --account={HPC_ACCOUNT}
 #SBATCH --partition={HPC_PARTITION}
-#SBATCH --gres=gpu:1
-#SBATCH --ntasks=1
+#SBATCH --nodes=4
+#SBATCH --ntasks-per-node=64
 #SBATCH --cpus-per-task=1
 #SBATCH --time={HPC_TIME}
+#SBATCH --no-requeue
+#SBATCH --exclusive
 
-gmx mdrun -v -deffnm {deffnm} -ntmpi 1 -nb gpu -pme gpu
-	"""
+# Module load, export
+export OMP_NUM_THREADS=16
+#export GMX_GPU_DD_COMMS=true
+#export GMX_GPU_PME_PP_COMMS=true
+#export GMX_FORCE_UPDATE_DEFAULT_GPU=true
 
-			with open(script_path, 'w') as fh:
-				fh.write(content)
+# Module setup
+module purge
+module load PrgEnv-gnu/8.6.0
+module load gcc/12.2.0
+module load cray-mpich
+module load cray-fftw
 
-			# Compress the JOB directory into a tarball for transfer to the HPC
-			job_dir = os.path.dirname(output.job_description)
-			job_targz = f'{job_dir}.tar.gz'
-			with tarfile.open(job_targz, "w:gz") as tar:
-				for fn in os.listdir(job_dir):
-					p = os.path.join(job_dir, fn)
-					tar.add(p, arcname=os.path.basename(fn))
+# set network and cray mpich env
+export OMP_NUM_THREADS=1
+export MPICH_SMP_SINGLE_COPY_MODE=NONE
+export FI_PROVIDER=cxi
+export MPICH_OFI_STARTUP_CONNECT=1
 
-			remote_dir = os.path.join(HPC_REMOTE_BASE, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
-			ssh_target = f"{HPC_USER}@{HPC_HOST}"
+# fix shared  library pathing
+# export CRAY_FFTW_DIR="${{CRAY_FFTW_DIR:-$FFTW_DIR}}"
+# export LD_LIBRARY_PATH="${{CRAY_FFTW_DIR}}/lib:${{LD_LIBRARY_PATH}}"
 
-			# Require successful transfer before writing the submitted status.
-			shell("""
-				ssh {ssh_target} "mkdir -p '{remote_dir}'"
-				rsync -avz {job_targz} {ssh_target}:{remote_dir}/JOB.tar.gz
-				ssh {ssh_target} "test -f '{remote_dir}/JOB.tar.gz' && echo 'HPC transfer confirmed: JOB.tar.gz exists at {remote_dir}/JOB.tar.gz'"
-			""")
-
-			with open(input.scheduling, 'a') as f:
-				f.write("JOB_STATUS: Submitted\n")
-				f.write(f"REMOTE_DIR: {remote_dir}\n")
-
-		else:
-			raise ValueError(f"Unknown compute target in scheduling info: {scheduling_info.get('COMPUTE')}")
-
+# --- Source GROMACS Binaries ---
+export gmxhome={HPC_GMX_HOME}
+export PATH="${{gmxhome}}/bin:${{PATH}}"
+export LD_LIBRARY_PATH="${{gmxhome}}/lib64:${{gmxhome}}/lib:${{LD_LIBRARY_PATH}}"
 
 
-		#os.chmod(script_path, 0o755)
 
+
+# --- Helper Function for MDRun ---
+# This checks if a checkpoint exists for the specific step to resume it
+
+# Helper Function for MDRun
+run_md() {{
+    local name="$1"
+    if [ -f "${{name}}.cpt" ]; then
+        echo "--> Resuming ${{name}} from checkpoint..."
+        srun gmx_mpi mdrun -v -deffnm "${{name}}" -dlb yes -cpi "${{name}}.cpt"
+    else
+        echo "--> Starting ${{name}}..."
+        srun gmx_mpi mdrun -v -deffnm "${{name}}" -dlb yes
+    fi
+}}
+
+# Production MD Execution
+if [ ! -f "{deffnm}.gro" ]; then
+    run_md
+"""
+				os.makedirs(os.path.dirname(script_path), exist_ok=True)
+				with open(script_path, "w") as fh:
+					fh.write(slurm_script)
+				logger.info("Generated Slurm batch script: %s", script_path)
+
+				# Create Tarball Archive
+				job_dir = os.path.dirname(output.job_description)
+				job_targz = f"{job_dir}.tar.gz"
+				logger.info("Archiving directory '%s' into '%s'...", job_dir, job_targz)
+
+				with tarfile.open(job_targz, "w:gz") as tar:
+					for fn in os.listdir(job_dir):
+						p = os.path.join(job_dir, fn)
+						tar.add(p, arcname=os.path.basename(fn))
+				logger.info("Archive created successfully (Size: %.2f KB)", os.path.getsize(job_targz) / 1024.0)
+
+				# Remote Sync via SSH/Rsync
+				remote_dir = os.path.join(HPC_REMOTE_BASE, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
+				ssh_target = f"{HPC_USER}@{HPC_HOST}"
+				logger.info("Deploying archive to remote target %s:%s", ssh_target, remote_dir)
+
+				shell("""
+					ssh {ssh_target} "mkdir -p '{remote_dir}'"
+					rsync -avz "{job_targz}" "{ssh_target}:{remote_dir}/JOB.tar.gz"
+					ssh {ssh_target} "test -f '{remote_dir}/JOB.tar.gz' && echo 'Remote payload verified at {remote_dir}/JOB.tar.gz'"
+				""")
+				logger.info("Remote transfer and payload verification completed.")
+
+				# Append Submission Metadata
+				with open(input.scheduling, "a") as f:
+					f.write("JOB_STATUS: Submitted\n")
+					f.write(f"REMOTE_DIR: {remote_dir}\n")
+				logger.info("Updated scheduling file '%s' with submission metadata.", input.scheduling)
+
+			else:
+				logger.error("Invalid COMPUTE target '%s' in %s", compute_target, input.scheduling)
+				raise ValueError(f"Unknown compute target in scheduling info: {compute_target}")
+
+			logger.info("Rule create_md_job completed successfully for %s.", target_id)
+
+		except Exception as err:
+			logger.exception("Execution failed in create_md_job for %s: %s", target_id, str(err))
+			raise
 
 
 # Rule 5: Run 100n Molecular Dynamics
+
 rule run_molecular_dynamics:
-	input:
-		tpr_file = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.tpr",
-		job_description = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md_job.job",
-	output:
-		# sentinel method (marks completion in the md_100ns folder)
-		done = 'results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt'
-	log:
-		"logs/{pdb}/{source}/{model_id}/production_mdrun.log"
-	params:
-		#log_abs = lambda wildcards, input, output, log: os.path.abspath(str(log[0]))
-		#log_abs = lambda log: os.path.abspath(str(log))
-		log_abs = lambda wildcards: os.path.abspath(
+    input:
+        tpr_file = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.tpr",
+        job_description = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md_job.job"
+    output:
+        done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt"
+    log:
+        "logs/{pdb}/{source}/{model_id}/production_mdrun.log"
+    params:
+        log_abs = lambda wildcards: os.path.abspath(
 			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/production_mdrun.log"
 		)
+    resources:
+        gpu = 1
+    run:
+        # Setup Logger
+        log_path = params.log_abs
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-		#log_abs = lambda wildcards, input, log: os.path.abspath(str(log))
-	resources:
-		gpu = 1
-	run:
-		with open(input.job_description, 'r') as f:
-			job_description = f.read().strip()
+        logger = logging.getLogger(f"run_md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}")
+        logger.setLevel(logging.INFO)
+        logger.handlers.clear()
 
-		if job_description == 'BLANK': # run locally 
-			print(f"🐍 [Snakemake] Running MD locally for {wildcards.pdb} {wildcards.source} {wildcards.model_id}...🐍")
+        fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+        fh = logging.FileHandler(log_path, mode="a")
+        fh.setFormatter(fmt)
+        logger.addHandler(fh)
 
-			#log_abs = os.path.abspath(str(log))
-			#mdp_abs = os.path.abspath(str(input.mdp))
-			job_dir = os.path.dirname(input.job_description)
-			cpt_path = os.path.join(job_dir, f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md.cpt")
-			prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
-			
-			# tpr compilation is handled earlier in the pipeline (schedule/create job)
-			if os.path.exists(cpt_path):
-				print(f"TODO: edit naming to be descriptive of current work (pdb + origin) 🐍 [Snakemake] Active checkpoint detected. Resuming {wildcards.pdb}...🐍")
+        ch = logging.StreamHandler()
+        ch.setFormatter(fmt)
+        logger.addHandler(ch)
 
-				shell("""
-					cd {job_dir}
-					gmx mdrun -v -ntmpi 1 \
-					-deffnm {prefix} \
-					-cpi $(basename {cpt_path}) \
-					-nb gpu -pme gpu >> {params.log_abs} 2>&1
-				""")
-			else:
-				print(f"🐍 [Snakemake] Launching fresh execution tree for {wildcards.pdb} {wildcards.source} {wildcards.model_id}...🐍")
+        target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}"
+        prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+        job_dir = os.path.dirname(input.job_description)
+        local_dir = os.path.abspath(os.path.dirname(output.done))
+        step_log_file = os.path.join(local_dir, "simulation_steps.log")
 
-				shell("""
-					cd {job_dir}
-					gmx mdrun -v -ntmpi 1 \
-					-deffnm {prefix} \
-					-nb gpu -pme gpu >> {params.log_abs} 2>&1
-				""")
+        def log_sim_step(step_name, details=""):
+            """Writes timestamped step tracking events to simulation_steps.log."""
+            timestamp = subprocess.check_output('date +"%Y-%m-%d %H:%M:%S"', shell=True).decode().strip()
+            line = f"[{timestamp}] [STEP: {step_name}] {details}\n"
+            with open(step_log_file, "a") as f:
+                f.write(line)
 
-			# symlinking I think!!! NOTE: be wary
-			shell("""
-				cd {job_dir}
-				[ -f {prefix}.xtc ] && ln -sf {prefix}.xtc ../md.xtc
-				[ -f {prefix}.tpr ] && ln -sf {prefix}.tpr ../md.tpr
-			""")
+        def get_remote_gromacs_progress(ssh_target, remote_dir, prefix):
+            """Checks the tail of the remote .log file to fetch the latest step & simulated time."""
+            cmd = f"ssh {ssh_target} \"tail -n 100 '{remote_dir}/{prefix}.log' 2>/dev/null | grep -E '^\\s*[0-0]*[0-9]+\\s+[0-9]+\\.'"
+            try:
+                output = subprocess.check_output(cmd, shell=True).decode().strip()
+                if output:
+                    last_line = output.splitlines()[-1].split()
+                    step_val = last_line[0]
+                    ps_val = float(last_line[1])
+                    ns_val = ps_val / 1000.0
+                    return f"Step: {step_val} ({ns_val:.2f} ns / 100.0 ns)"
+            except Exception:
+                pass
+            return None
 
-			with open(output.done, "w") as f:
-				f.write("MD simulation finished to completion.")
-		else:
-			print(f"🐍 [Snakemake] Submitting MD job to HPC for {wildcards.pdb} {wildcards.source} {wildcards.model_id}...🐍")
+        logger.info("Starting MD execution phase for target: %s", target_id)
+        
+        # Preserve first start time if log exists, or mark INIT
+        if not os.path.exists(step_log_file):
+            log_sim_step("INIT", f"Target: {target_id}")
+        else:
+            log_sim_step("RESUME_WORKFLOW", f"Workflow checked target: {target_id}")
 
-			ssh_target = f"{HPC_USER}@{HPC_HOST}"
-			remote_dir = os.path.join(HPC_REMOTE_BASE, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
-			job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
-			job_script = os.path.basename(input.job_description)
-			prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
-			local_dir = os.path.abspath(os.path.dirname(output.done))			#tar_gz = os.path.join(REMOTE_, f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md.tar.gz")
+        try:
+            with open(input.job_description, "r") as f:
+                job_description = f.read().strip()
 
-			shell("""
-				SSH_TARGET="{ssh_target}"
-				REMOTE_DIR="{remote_dir}"
-				JOB_NAME="{job_name}"
-				JOB_SCRIPT="{job_script}"
-				PREFIX="{prefix}"
-				LOCAL_DIR="{local_dir}"
+            # -------------------------------------------------------------
+            # LOCAL EXECUTION PATHWAY
+            # -------------------------------------------------------------
+            if job_description == "BLANK":
+                logger.info("Target configured for LOCAL execution.")
+                log_sim_step("EXEC_MODE", "Local execution requested")
+                cpt_path = os.path.join(job_dir, f"{prefix}.cpt")
 
-				# 1. Check if the job finished previously on HPC (.gro coordinate output exists)
-				REMOTE_DONE=$(ssh "$SSH_TARGET" "test -f '$REMOTE_DIR/$PREFIX.gro' && echo 'YES' || echo 'NO'")
+                if os.path.exists(cpt_path):
+                    logger.info("Active checkpoint detected. Resuming local MD run...")
+                    log_sim_step("MD_RESUME", f"Resuming from checkpoint {prefix}.cpt")
+                    shell("""
+                        cd "{job_dir}"
+                        gmx mdrun -v -ntmpi 1 \
+                            -deffnm {prefix} \
+                            -cpi $(basename {cpt_path}) \
+                            -nb gpu -pme gpu >> "{log_path}" 2>&1
+                    """)
+                else:
+                    logger.info("Launching fresh local MD run...")
+                    log_sim_step("MD_START", f"Starting fresh mdrun for {prefix}")
+                    shell("""
+                        cd "{job_dir}"
+                        gmx mdrun -v -ntmpi 1 \
+                            -deffnm {prefix} \
+                            -nb gpu -pme gpu >> "{log_path}" 2>&1
+                    """)
 
-				if [ "$REMOTE_DONE" = "YES" ]; then
-					echo "🐍 [Snakemake] MD simulation already completed on remote HPC." >> "{params.log_abs}"
-				else
-					# 2. Check if job is currently active in Slurm queue
-					JOB_ID=$(ssh "$SSH_TARGET" "squeue -u {HPC_USER} -n $JOB_NAME -h -o %i")
+                shell("""
+                    cd "{job_dir}"
+                    [ -f "{prefix}.xtc" ] && ln -sf "{prefix}.xtc" ../md.xtc
+                    [ -f "{prefix}.tpr" ] && ln -sf "{prefix}.tpr" ../md.tpr
+                """)
+                log_sim_step("MD_COMPLETE", "Local run finished successfully")
 
-					if [ -n "$JOB_ID" ]; then
-						echo "🐍 [Snakemake] Job $JOB_NAME (ID: $JOB_ID) is already in squeue. Monitoring..."
-						# Poll every 30 seconds until job leaves queue
-						ssh "$SSH_TARGET" "while squeue -j $JOB_ID -h | grep -q $JOB_ID; do sleep 30; done" >> "{params.log_abs}" 2>&1
-					else
-						echo "🐍 [Snakemake] Submitting new Slurm job to HPC..."
-						# Extract transfer bundle and submit with --wait flag
-						ssh "$SSH_TARGET" "cd '$REMOTE_DIR' && [ -f JOB.tar.gz ] && tar -xzf JOB.tar.gz && sbatch --wait $JOB_SCRIPT" >> "${params.log_abs}" 2>&1
-					fi
-				fi
+            # -------------------------------------------------------------
+            # HPC EXECUTION PATHWAY
+            # -------------------------------------------------------------
+            else:
+                ssh_target = f"{HPC_USER}@{HPC_HOST}"
+                clean_base = HPC_REMOTE_BASE.lstrip("~/")
+                remote_dir = os.path.join(clean_base, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
+                job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
+                job_script = os.path.basename(input.job_description)
 
-				# 3. Tar up output trajectory, energy, and coordinate files on HPC
-				echo "🐍 [Snakemake] Archiving MD results on HPC..." >> "{params.log_abs}"
-				ssh "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz $PREFIX.*" >> "{params.log_abs}" 2>&1
+                log_sim_step("EXEC_MODE", f"HPC execution target ({ssh_target})")
 
-				# 4. Sync tarball back to local project directory
-				echo "🐍 [Snakemake] Transferring compressed results back to workstation..." >> "{params.log_abs}"
-				rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "{params.log_abs}" 2>&1
+                # Check remote completion
+                check_cmd = f"ssh {ssh_target} \"test -f '{remote_dir}/{prefix}.gro' && echo 'YES' || echo 'NO'\""
+                remote_done = subprocess.check_output(check_cmd, shell=True).decode().strip()
 
-				# 5. Extract results locally and map symlinks for step 6 (trjconv)
-				tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/"
-				
-				if [ -f "$LOCAL_DIR/$PREFIX.xtc" ]; then
-					ln -sf "$PREFIX.xtc" "$LOCAL_DIR/md.xtc"
-				fi
-				if [ -f "$LOCAL_DIR/$PREFIX.tpr" ]; then
-					ln -sf "$PREFIX.tpr" "$LOCAL_DIR/md.tpr"
-				fi
-			""")
+                if remote_done == "YES":
+                    logger.info("🎉 Remote simulation already finished! (Found %s.gro on HPC)", prefix)
+                    log_sim_step("CHECK_REMOTE", f"Simulation finished ({prefix}.gro present)")
+                else:
+                    # Check queue status
+                    squeue_cmd = f"ssh {ssh_target} \"squeue -u {HPC_USER} -n {job_name} -h -o %i\""
+                    job_id = subprocess.check_output(squeue_cmd, shell=True).decode().strip()
 
-			with open(output.done, "w") as f:
-				f.write(f"HPC MD simulation completed and output fetched successfully from {HPC_HOST}.")
-			#job_dir_targz = f'{params.remote_dir}/JOB.tar.gz'
+                    if job_id:
+                        logger.info("⏳ Slurm Job '%s' already active in queue (Job ID: %s).", job_name, job_id)
+                        log_sim_step("SLURM_ACTIVE", f"Job ID {job_id} running/queued on HPC")
+                    else:
+                        logger.info("🚀 Submitting new Slurm job to Komondor (%s)...", ssh_target)
+                        submit_cmd = f"ssh {ssh_target} \"cd '{remote_dir}' && [ -f JOB.tar.gz ] && tar -xzf JOB.tar.gz && sbatch {job_script}\""
+                        submit_output = subprocess.check_output(submit_cmd, shell=True).decode().strip()
+                        
+                        job_id = submit_output.split()[-1] if "Submitted batch job" in submit_output else "UNKNOWN"
+                        logger.info("✅ Slurm job successfully submitted! Assigned Job ID: %s", job_id)
+                        log_sim_step("SLURM_SUBMIT", f"Submitted batch job ID: {job_id}")
 
+                    # Monitor Slurm execution while logging periodic heartbeat step updates
+                    if job_id != "UNKNOWN":
+                        logger.info("Monitoring Slurm Job %s...", job_id)
+                        last_progress_msg = ""
+                        
+                        while True:
+                            # Check if job is still in squeue
+                            check_q = f"ssh {ssh_target} \"squeue -j {job_id} -h -o %t\""
+                            job_state = subprocess.check_output(check_q, shell=True).decode().strip()
+                            
+                            if not job_state:
+                                break  # Job completed and left queue
+                            
+                            # Log heartbeat progress if running
+                            if job_state == "R":
+                                progress = get_remote_gromacs_progress(ssh_target, remote_dir, prefix)
+                                if progress and progress != last_progress_msg:
+                                    log_sim_step("HEARTBEAT", f"Job {job_id} running - {progress}")
+                                    last_progress_msg = progress
+                                else:
+                                    log_sim_step("HEARTBEAT", f"Job {job_id} actively executing on HPC")
+                            else:
+                                log_sim_step("HEARTBEAT", f"Job {job_id} queued (State: {job_state})")
 
+                            time.sleep(180)  # Poll every 3 minutes (gentle on HPC)
 
-			# --- REMOTE HPC EXECUTION ---
-			#shell("""				
-			#	# 0. Check if targz already on server
-			#
-			#	# 1. Ensure clean remote directory and sync tarball via multiplexed SSH
-			#	#ssh {ssh_target} "mkdir -p {params.remote_dir}"
-			#	#rsync -avz {input.bundle} komondor:{params.remote_dir}/JOB.tar.gz
-			#
-			#	# 2. Extract, submit job, and poll for completion remotely
-			#	ssh {ssh_target} "cd {remote_dir} && tar -xzf {jobdir} && sbatch --wait btestls64.job"
-			#
-			#	# 2.5: tar up results
-			#	# 3. Download results back to workstation
-			#	#rsync -avz {ssh_target}:{params.remote_dir}/md_prod.xtc {output.xtc}
-			#	#rsync -avz {ssh_target}:{params.remote_dir}/md_prod.edr {output.edr}
-			#
-			#	# 4. Immediate Remote Wipe (Keep scratch 100% clean)
-			#	#ssh {ssh_target} "rm -rf {params.remote_dir}"
-			#""")
+                        log_sim_step("SLURM_FINISHED", f"Slurm Job {job_id} completed execution")
 
+                # Sync and retrieve results locally
+                logger.info("📦 Archiving and retrieving simulation artifacts from HPC...")
+                log_sim_step("RETRIEVE_START", "Fetching remote output files via rsync")
+
+                shell(f"""
+                    SSH_TARGET="{ssh_target}"
+                    REMOTE_DIR="{remote_dir}"
+                    PREFIX="{prefix}"
+                    LOCAL_DIR="{local_dir}"
+                    LOG_FILE="{log_path}"
+
+                    ssh "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz $PREFIX.*" >> "$LOG_FILE" 2>&1
+                    rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
+                    tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/"
+
+                    [ -f "$LOCAL_DIR/$PREFIX.xtc" ] && ln -sf "$PREFIX.xtc" "$LOCAL_DIR/md.xtc"
+                    [ -f "$LOCAL_DIR/$PREFIX.tpr" ] && ln -sf "$PREFIX.tpr" "$LOCAL_DIR/md.tpr"
+
+                    rm -f "$LOCAL_DIR/md_results.tar.gz"
+                    ssh "$SSH_TARGET" "rm -f '$REMOTE_DIR/md_results.tar.gz'" >> "$LOG_FILE" 2>&1
+                """)
+
+                log_sim_step("RETRIEVE_COMPLETE", "Downloaded, extracted, and cleaned up md_results.tar.gz")
+
+            # Sentinel output
+            with open(output.done, "w") as f:
+                f.write(f"MD simulation completed for {target_id}.\n")
+            
+            log_sim_step("DONE", "Pipeline rule finished successfully.")
+
+        except Exception as err:
+            log_sim_step("ERROR", str(err))
+            logger.exception("Execution failed in run_molecular_dynamics for %s: %s", target_id, str(err))
+            raise
 
 #rule md_repackaging:
 
