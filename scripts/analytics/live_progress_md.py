@@ -1,6 +1,6 @@
 import glob
-import re
 import os
+import re
 import time
 from datetime import datetime, timedelta
 from rich.live import Live
@@ -41,30 +41,45 @@ def parse_md_logs():
             else:
                 name = log_path
 
-            # 1. First Start Time (earliest INIT / log creation)
+            # 1. Start & Last Active Timestamps
             first_line = lines[0]
             first_match = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", first_line)
-            if first_match:
-                first_start_dt = datetime.strptime(first_match.group(1), "%Y-%m-%d %H:%M:%S")
-            else:
-                first_start_dt = datetime.fromtimestamp(os.path.getctime(log_path))
+            first_start_dt = (
+                datetime.strptime(first_match.group(1), "%Y-%m-%d %H:%M:%S")
+                if first_match
+                else datetime.fromtimestamp(os.path.getctime(log_path))
+            )
             first_start_str = first_start_dt.strftime("%b %d %H:%M")
 
-            # 2. Last Active Time (timestamp of the most recent logged event)
             latest_line = lines[-1]
             last_match = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", latest_line)
-            if last_match:
-                last_active_dt = datetime.strptime(last_match.group(1), "%Y-%m-%d %H:%M:%S")
-            else:
-                last_active_dt = datetime.fromtimestamp(os.path.getmtime(log_path))
+            last_active_dt = (
+                datetime.strptime(last_match.group(1), "%Y-%m-%d %H:%M:%S")
+                if last_match
+                else datetime.fromtimestamp(os.path.getmtime(log_path))
+            )
             last_active_str = last_active_dt.strftime("%b %d %H:%M")
 
-            # 3. Parse latest step status
+            # 2. Latest Step & Details
             step_match = re.search(r"\[STEP:\s*([^\]]+)\]\s*(.*)", latest_line)
             step_code = step_match.group(1) if step_match else "UNKNOWN"
             step_details = step_match.group(2) if step_match else ""
 
-            # 4. Parse Checkpoints for Performance & Step Rate
+            # 3. Direct Progress Extraction from HEARTBEAT lines
+            hb_ns = None
+            hb_dt = None
+            for line in reversed(lines):
+                hb_match = re.search(
+                    r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*?running\s*-\s*([\d\.]+)\s*ns",
+                    line,
+                    re.IGNORECASE
+                )
+                if hb_match:
+                    hb_dt = datetime.strptime(hb_match.group(1), "%Y-%m-%d %H:%M:%S")
+                    hb_ns = float(hb_match.group(2))
+                    break
+
+            # 4. Checkpoints Fallback
             sim_dir = os.path.dirname(log_path)
             gmx_logs = [
                 f for f in glob.glob(os.path.join(sim_dir, "*.log")) + glob.glob(os.path.join(sim_dir, "JOB", "*.log"))
@@ -94,12 +109,33 @@ def parse_md_logs():
                     if checkpoints:
                         break
 
-            # 5. Row Construction & Metric Formatting
+            # 5. Determine State & Progress Formatting
             if step_code in ["DONE", "SIMULATION_SUMMARY"]:
                 sim_time_str = "100.0 / 100 ns"
                 progress_str = "100.0%"
                 perf_str = "Finished"
                 eta_str = "Done"
+
+            elif hb_ns is not None:
+                pct = min(100.0, (hb_ns / TOTAL_NS) * 100.0)
+                sim_time_str = f"{hb_ns:.2f} / {TOTAL_NS:.0f} ns"
+                progress_str = f"{pct:.1f}%"
+
+                # Calculate speed using time elapsed since start or heartbeat interval
+                elapsed_sec = (last_active_dt - first_start_dt).total_seconds()
+                if elapsed_sec > 60 and hb_ns > 0:
+                    ns_per_day = (hb_ns / elapsed_sec) * 86400.0
+                    remaining_sec = ((TOTAL_NS - hb_ns) / hb_ns) * elapsed_sec
+                    eta_dt = datetime.now() + timedelta(seconds=remaining_sec)
+                    
+                    if eta_dt.date() == datetime.now().date():
+                        eta_str = eta_dt.strftime("Today %H:%M")
+                    else:
+                        eta_str = eta_dt.strftime("%b %d %H:%M")
+                    perf_str = f"{ns_per_day:.1f} ns/day"
+                else:
+                    perf_str = "Calculating..."
+                    eta_str = "Running"
 
             elif checkpoints:
                 latest_step, latest_time = checkpoints[0]
@@ -123,7 +159,7 @@ def parse_md_logs():
                     
                     eta_dt = datetime.now() + timedelta(seconds=remaining_sec)
                     if eta_dt.date() == datetime.now().date():
-                        eta_str = eta_dt.strftime("Today at %H:%M")
+                        eta_str = eta_dt.strftime("Today %H:%M")
                     else:
                         eta_str = eta_dt.strftime("%b %d %H:%M")
                     perf_str = f"{ns_per_day:.1f} ns/day"
@@ -138,8 +174,8 @@ def parse_md_logs():
                 sim_time_str = "0.0 / 100 ns"
                 progress_str = "0.0%"
 
-                if "SLURM" in step_code or "EXEC_MODE" in step_code:
-                    job_id_match = re.search(r"ID:?\s*(\d+)", step_details, re.IGNORECASE)
+                if "SLURM" in step_code or "EXEC_MODE" in step_code or step_code == "HEARTBEAT":
+                    job_id_match = re.search(r"Job\s*(\d+)", step_details, re.IGNORECASE)
                     job_str = f"Job {job_id_match.group(1)}" if job_id_match else "Queued"
                     perf_str = f"HPC ({job_str})"
                     eta_str = "Running on HPC"
@@ -171,5 +207,5 @@ def parse_md_logs():
 if __name__ == "__main__":
     with Live(parse_md_logs(), refresh_per_second=0.1) as live:
         while True:
-            time.sleep(30)
+            time.sleep(10)
             live.update(parse_md_logs())
