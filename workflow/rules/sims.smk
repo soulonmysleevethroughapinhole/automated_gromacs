@@ -479,40 +479,43 @@ rule run_molecular_dynamics:
 			line = f"[{timestamp}] [STEP: {step_name}] {details}\n"
 			with open(step_log_file, "a") as f:
 				f.write(line)
-
+		
 		def get_remote_gromacs_progress(
-		    ssh_target: str, remote_dir: str, prefix: str
+			ssh_target: str, remote_dir: str, prefix: str
 		) -> str | None:
-		    """Safely fetches step progress from remote GROMACS log without shell escaping crashes."""
-		    log_file = f"{remote_dir}/{prefix}.log"
+			"""Fetches real-time ETA or step count directly from Slurm .err or gmx log."""
+			# First, look for live stdout/stderr dumps matching job error log patterns
+			remote_cmd = (
+				f"cd {remote_dir} && "
+				f"if [ -f *.err ]; then tail -n 20 *.err | grep -i 'will finish'; "
+				f"elif [ -f {prefix}.log ]; then tail -n 100 {prefix}.log | grep -E '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+\\.'; "
+				f"fi"
+			)
 		
-		    # Use standard double quotes around remote path, and simple pattern matching
-		    remote_cmd = (
-		        f"test -f {log_file} && tail -n 100 {log_file} | grep -E"
-		        r" '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+\.'"
-		    )
+			res = subprocess.run(
+				["ssh", ssh_target, remote_cmd],
+				capture_output=True,
+				text=True,
+				check=False,
+			)
 		
-		    res = subprocess.run(
-		        ["ssh", ssh_target, remote_cmd],
-		        capture_output=True,
-		        text=True,
-		        check=False,
-		    )
+			if res.returncode != 0 or not res.stdout.strip():
+				return None
 		
-		    if res.returncode != 0 or not res.stdout.strip():
-		        return None
+			last_line = res.stdout.strip().splitlines()[-1]
 		
-		    lines = res.stdout.strip().splitlines()
-		    if not lines:
-		        return None
+			# If captured from .err file (e.g. "step 6144100, will finish Wed Aug 26 04:04:18 2026")
+			if "will finish" in last_line:
+				# Extract the step and ETA cleanly
+				return last_line.strip()
 		
-		    last_line = lines[-1].split()
-		    try:
-		        ps_val = float(last_line[1])
-		        ns_val = ps_val / 1000.0
-		        return f"{ns_val:.2f} ns"
-		    except (IndexError, ValueError):
-		        return None
+			# Fallback for parsing step/ps from .log
+			parts = last_line.split()
+			try:
+				ps_val = float(parts[1])
+				return f"{ps_val / 1000.0:.2f} ns"
+			except (IndexError, ValueError):
+				return None
 
 		logger.info("Starting MD execution phase for target: %s", target_id)
 		
@@ -676,47 +679,47 @@ rule run_molecular_dynamics:
 						while True:
 							# Query job state safely (check=False avoids CalledProcessError when job finishes)
 							if job_id and str(job_id).isdigit():
-							    check_q = [
-							        "ssh",
-							        ssh_target,
-							        f"squeue -j {job_id} -h -o '%t'",
-							    ]
-							    q_check = subprocess.run(
-							        check_q,
-							        capture_output=True,
-							        text=True,
-							        check=False,
-							    )
+								check_q = [
+									"ssh",
+									ssh_target,
+									f"squeue -j {job_id} -h -o '%t'",
+								]
+								q_check = subprocess.run(
+									check_q,
+									capture_output=True,
+									text=True,
+									check=False,
+								)
 							
-							    # Clean stdout: take only the first token (e.g. "R" or "PD")
-							    stdout_clean = q_check.stdout.strip()
-							    job_state = stdout_clean.split()[0] if stdout_clean else ""
+								# Clean stdout: take only the first token (e.g. "R" or "PD")
+								stdout_clean = q_check.stdout.strip()
+								job_state = stdout_clean.split()[0] if stdout_clean else ""
 							
-							    if not job_state:
-							        logger.info(
-							            "Job %s left the queue. Verifying completion...",
-							            job_id,
-							        )
-							        break  # Job completed or died; exit polling loop
+								if not job_state:
+									logger.info(
+										"Job %s left the queue. Verifying completion...",
+										job_id,
+									)
+									break  # Job completed or died; exit polling loop
 							
-							    if job_state == "R":
-							        progress = get_remote_gromacs_progress(ssh_target, remote_dir, prefix)
-							        if progress and progress != last_progress_msg:
-							            log_sim_step(
-							                "HEARTBEAT",
-							                f"Job {job_id} running - {progress}",
-							            )
-							            last_progress_msg = progress
-							        else:
-							            log_sim_step(
-							                "HEARTBEAT",
-							                f"Job {job_id} actively executing on HPC",
-							            )
-							    else:
-							        log_sim_step(
-							            "HEARTBEAT",
-							            f"Job {job_id} queued (State: {job_state})",
-							        )
+								if job_state == "R":
+									progress = get_remote_gromacs_progress(ssh_target, remote_dir, prefix)
+									if progress and progress != last_progress_msg:
+										log_sim_step(
+											"HEARTBEAT",
+											f"Job {job_id} running - {progress}",
+										)
+										last_progress_msg = progress
+									else:
+										log_sim_step(
+											"HEARTBEAT",
+											f"Job {job_id} actively executing on HPC",
+										)
+								else:
+									log_sim_step(
+										"HEARTBEAT",
+										f"Job {job_id} queued (State: {job_state})",
+									)
 
 							time.sleep(180)  # Poll every 3 minutes
 
@@ -752,6 +755,8 @@ rule run_molecular_dynamics:
 				logger.info("📦 Archiving and retrieving simulation artifacts from HPC...")
 				log_sim_step("RETRIEVE_START", "Fetching remote output files via rsync")
 
+
+
 				shell(f"""
 					SSH_TARGET="{ssh_target}"
 					REMOTE_DIR="{remote_dir}"
@@ -761,10 +766,12 @@ rule run_molecular_dynamics:
 
 					ssh "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz $PREFIX.*" >> "$LOG_FILE" 2>&1
 					rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
-					tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/"
+					mkdir "$LOCAL_DIR/md_results"
+					tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/md_results"
 
-					[ -f "$LOCAL_DIR/$PREFIX.xtc" ] && ln -sf "$PREFIX.xtc" "$LOCAL_DIR/md.xtc"
-					[ -f "$LOCAL_DIR/$PREFIX.tpr" ] && ln -sf "$PREFIX.tpr" "$LOCAL_DIR/md.tpr"
+					# I don't want to bother with this yet.
+					#[ -f "$LOCAL_DIR/$PREFIX.xtc" ] && ln -sf "$PREFIX.xtc" "$LOCAL_DIR/md.xtc"
+					#[ -f "$LOCAL_DIR/$PREFIX.tpr" ] && ln -sf "$PREFIX.tpr" "$LOCAL_DIR/md.tpr"
 
 					rm -f "$LOCAL_DIR/md_results.tar.gz"
 					ssh "$SSH_TARGET" "rm -f '$REMOTE_DIR/md_results.tar.gz'" >> "$LOG_FILE" 2>&1
