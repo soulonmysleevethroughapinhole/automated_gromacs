@@ -11,6 +11,7 @@ import traceback
 import re
 import subprocess
 import time
+from pathlib import Path
 
 HPC_HOST = os.getenv("HPC_HOST")
 HPC_USER = os.getenv("HPC_USER")
@@ -242,12 +243,19 @@ rule schedule_md_job:
 		os.remove(os.path.join(exec_dir, os.path.basename(input.top)))
 		os.remove(os.path.join(exec_dir, os.path.basename(input.mdp)))
 		
-		if compute_target == "local": # write local scheduling into job description
-			with open(output.scheduling, 'w') as f:
-				f.write("COMPUTE: local")
-		elif compute_target == "HPC":
-			with open(output.scheduling, 'w') as f:
-				f.write("COMPUTE: HPC")
+		scheduling_info = {}
+
+
+
+		if compute_target in ["local", 'HPC']: # write local scheduling into job description
+			scheduling_info['COMPUTE'] = compute_target
+			with open (output.scheduling, 'w') as f:
+				yaml.safe_dump(scheduling_info, f, sort_keys=False)
+			#with open(output.scheduling, 'w') as f:
+			#	f.write("COMPUTE: local")
+		#elif compute_target == "HPC":
+			#with open(output.scheduling, 'w') as f:
+			#	f.write("COMPUTE: HPC")
 		else:
 			raise ValueError(f"{compute_target} Compute type not permitted ")
 
@@ -293,8 +301,11 @@ rule create_md_job:
 			if not os.path.exists(input.scheduling):
 				raise FileNotFoundError(f"Scheduling file not found at {input.scheduling}")
 
+			#with open(input.scheduling, "r") as f:
+			#	scheduling_info = yaml.load(f, Loader=yaml.FullLoader) or {}
 			with open(input.scheduling, "r") as f:
-				scheduling_info = yaml.load(f, Loader=yaml.FullLoader) or {}
+				scheduling_info = yaml.safe_load(f) or {}
+			
 
 			compute_target = scheduling_info.get("COMPUTE")
 			logger.info("Parsed compute target: '%s'", compute_target)
@@ -417,9 +428,15 @@ fi
 				logger.info("Remote transfer and payload verification completed.")
 
 				# Append Submission Metadata
-				with open(input.scheduling, "a") as f:
-					f.write("JOB_STATUS: Submitted\n")
-					f.write(f"REMOTE_DIR: {remote_dir}\n")
+				#with open(input.scheduling, "a") as f:
+				#	f.write("JOB_STATUS: Submitted\n")
+				#	f.write(f"REMOTE_DIR: {remote_dir}\n")
+				scheduling_info['JOB_STATUS'] = 'Submitted'
+				scheduling_info['REMOTE_DIR'] = str(remote_dir)
+
+				with open (input.scheduling, 'w') as f:
+					yaml.safe_dump(scheduling_info, f, sort_keys=False)
+				
 				logger.info("Updated scheduling file '%s' with submission metadata.", input.scheduling)
 
 			else:
@@ -432,20 +449,83 @@ fi
 			logger.exception("Execution failed in create_md_job for %s: %s", target_id, str(err))
 			raise
 
-
+# NOTE: Rule BRANCHING
+# split between LOCAL and HPC compute
 # Rule 5: Run 100n Molecular Dynamics
 
-rule run_molecular_dynamics:
+def get_compute_target(wildcards):
+	scheduling_file = Path(
+		f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/JOB/scheduling.yml"
+	)
+
+	if scheduling_file.exists():
+		with open(scheduling_file, 'r') as f:
+			data = yaml.safe_load(f) or {}
+			return data.get("COMPUTE", config.get(config.get("default_compute_target", "local")))
+	return config.get("default_compute_target", "local")
+
+def det_compute_scheduling(wildcards):
+	mode = get_compute_target(wildcards)
+	if mode in ['local', 'HPC']:
+		return f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/JOB/{mode}_md_completed.txt"
+	else:
+		raise ValueError(f"{mode} Compute type not permitted ... yet")
+
+def log_sim_step(step_name, step_log_file, details=""):
+	"""Writes timestamped step tracking events to simulation_steps.log."""
+	timestamp = subprocess.check_output('date +"%Y-%m-%d %H:%M:%S"', shell=True).decode().strip()
+	line = f"[{timestamp}] [STEP: {step_name}] {details}\n"
+	with open(step_log_file, "a") as f:
+		f.write(line)
+
+def get_remote_gromacs_progress(
+	ssh_target: str, remote_dir: str, prefix: str
+) -> str | None:
+	"""Fetches real-time ETA or step count directly from Slurm .err or gmx log."""
+	# First, look for live stdout/stderr dumps matching job error log patterns
+	remote_cmd = (
+		f"cd {remote_dir} && "
+		f"if [ -f *.err ]; then tail -n 20 *.err | grep -i 'will finish'; "
+		f"elif [ -f {prefix}.log ]; then tail -n 100 {prefix}.log | grep -E '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+\\.'; "
+		f"fi"
+	)
+
+	res = subprocess.run(
+		["ssh", ssh_target, remote_cmd],
+		capture_output=True,
+		text=True,
+		check=False,
+	)
+
+	if res.returncode != 0 or not res.stdout.strip():
+		return None
+
+	last_line = res.stdout.strip().splitlines()[-1]
+
+	# If captured from .err file (e.g. "step 6144100, will finish Wed Aug 26 04:04:18 2026")
+	if "will finish" in last_line:
+		# Extract the step and ETA cleanly
+		return last_line.strip()
+
+	# Fallback for parsing step/ps from .log
+	parts = last_line.split()
+	try:
+		ps_val = float(parts[1])
+		return f"{ps_val / 1000.0:.2f} ns"
+	except (IndexError, ValueError):
+		return None
+
+rule run_local_md:
 	input:
 		tpr_file = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.tpr",
 		job_description = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md_job.job"
 	output:
-		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt"
+		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/local_md_completed.txt"
 	log:
-		"logs/{pdb}/{source}/{model_id}/production_mdrun.log"
+		"logs/{pdb}/{source}/{model_id}/local_production_mdrun.log"
 	params:
 		log_abs = lambda wildcards: os.path.abspath(
-			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/production_mdrun.log"
+			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/local_production_mdrun.log"
 		)
 	resources:
 		gpu = 1
@@ -471,75 +551,28 @@ rule run_molecular_dynamics:
 		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
 		job_dir = os.path.dirname(input.job_description)
 		local_dir = os.path.abspath(os.path.dirname(output.done))
-		step_log_file = os.path.join(local_dir, "simulation_steps.log")
-
-		def log_sim_step(step_name, details=""):
-			"""Writes timestamped step tracking events to simulation_steps.log."""
-			timestamp = subprocess.check_output('date +"%Y-%m-%d %H:%M:%S"', shell=True).decode().strip()
-			line = f"[{timestamp}] [STEP: {step_name}] {details}\n"
-			with open(step_log_file, "a") as f:
-				f.write(line)
-		
-		def get_remote_gromacs_progress(
-			ssh_target: str, remote_dir: str, prefix: str
-		) -> str | None:
-			"""Fetches real-time ETA or step count directly from Slurm .err or gmx log."""
-			# First, look for live stdout/stderr dumps matching job error log patterns
-			remote_cmd = (
-				f"cd {remote_dir} && "
-				f"if [ -f *.err ]; then tail -n 20 *.err | grep -i 'will finish'; "
-				f"elif [ -f {prefix}.log ]; then tail -n 100 {prefix}.log | grep -E '^[[:space:]]*[0-9]+[[:space:]]+[0-9]+\\.'; "
-				f"fi"
-			)
-		
-			res = subprocess.run(
-				["ssh", ssh_target, remote_cmd],
-				capture_output=True,
-				text=True,
-				check=False,
-			)
-		
-			if res.returncode != 0 or not res.stdout.strip():
-				return None
-		
-			last_line = res.stdout.strip().splitlines()[-1]
-		
-			# If captured from .err file (e.g. "step 6144100, will finish Wed Aug 26 04:04:18 2026")
-			if "will finish" in last_line:
-				# Extract the step and ETA cleanly
-				return last_line.strip()
-		
-			# Fallback for parsing step/ps from .log
-			parts = last_line.split()
-			try:
-				ps_val = float(parts[1])
-				return f"{ps_val / 1000.0:.2f} ns"
-			except (IndexError, ValueError):
-				return None
+		step_log_file = os.path.join(job_dir, "simulation_steps.log")
 
 		logger.info("Starting MD execution phase for target: %s", target_id)
-		
-		# Preserve first start time if log exists, or mark INIT
+
 		if not os.path.exists(step_log_file):
-			log_sim_step("INIT", f"Target: {target_id}")
+			log_sim_step("INIT", step_log_file, f"Target: {target_id}")
 		else:
-			log_sim_step("RESUME_WORKFLOW", f"Workflow checked target: {target_id}")
+			log_sim_step("RESUME_WORKFLOW", step_log_file, f"Workflow checked target: {target_id}")
 
 		try:
+			# local specific code placeholder
 			with open(input.job_description, "r") as f:
 				job_description = f.read().strip()
 
-			# -------------------------------------------------------------
-			# LOCAL EXECUTION PATHWAY
-			# -------------------------------------------------------------
 			if job_description == "BLANK":
 				logger.info("Target configured for LOCAL execution.")
-				log_sim_step("EXEC_MODE", "Local execution requested")
+				log_sim_step("EXEC_MODE", step_log_file, "Local execution requested")
 				cpt_path = os.path.join(job_dir, f"{prefix}.cpt")
 
 				if os.path.exists(cpt_path):
 					logger.info("Active checkpoint detected. Resuming local MD run...")
-					log_sim_step("MD_RESUME", f"Resuming from checkpoint {prefix}.cpt")
+					log_sim_step("MD_RESUME", step_log_file, f"Resuming from checkpoint {prefix}.cpt")
 					shell("""
 						cd "{job_dir}"
 						gmx mdrun -v -ntmpi 1 \
@@ -549,7 +582,7 @@ rule run_molecular_dynamics:
 					""")
 				else:
 					logger.info("Launching fresh local MD run...")
-					log_sim_step("MD_START", f"Starting fresh mdrun for {prefix}")
+					log_sim_step("MD_START", step_log_file, f"Starting fresh mdrun for {prefix}")
 					shell("""
 						cd "{job_dir}"
 						gmx mdrun -v -ntmpi 1 \
@@ -562,233 +595,691 @@ rule run_molecular_dynamics:
 					[ -f "{prefix}.xtc" ] && ln -sf "{prefix}.xtc" ../md.xtc
 					[ -f "{prefix}.tpr" ] && ln -sf "{prefix}.tpr" ../md.tpr
 				""")
-				log_sim_step("MD_COMPLETE", "Local run finished successfully")
-
-			# HPC EXECUTION PATHWAY
-			# -------------------------------------------------------------
+				log_sim_step("MD_COMPLETE", step_log_file, "Local run finished successfully")
 			else:
-				ssh_target = f"{HPC_USER}@{HPC_HOST}"
-				clean_base = HPC_REMOTE_BASE.lstrip("~/")
-				remote_dir = os.path.join(
-					clean_base,
-					f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns",
-				)
-				job_name = (
-					f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
-				)
-				job_script = os.path.basename(input.job_description)
+				raise ValueError(f"{job_description} isn't BLANK as required for local runs")
+		except Exception as err:
+			log_sim_step("ERROR", step_log_file, str(err))
+			logger.exception("Execution failed in run_molecular_dynamics for %s: %s", target_id, str(err))
+			raise
 
-				log_sim_step("EXEC_MODE", f"HPC execution target ({ssh_target})")
+rule run_HPC_md:
+	input:
+		tpr_file = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.tpr",
+		job_description = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md_job.job"
+	output:
+		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/HPC_md_completed.txt"
+	log:
+		"logs/{pdb}/{source}/{model_id}/HPC_production_mdrun.log"
+	params:
+		log_abs = lambda wildcards: os.path.abspath(
+			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/HPC_production_mdrun.log"
+		)
+	run:
+		# Setup Logger
+		log_path = params.log_abs
+		os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-				# 1. Check remote completion upfront
-				check_cmd = [
+		logger = logging.getLogger(f"run_md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}")
+		logger.setLevel(logging.INFO)
+		logger.handlers.clear()
+
+		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+		fh = logging.FileHandler(log_path, mode="a")
+		fh.setFormatter(fmt)
+		logger.addHandler(fh)
+
+		ch = logging.StreamHandler()
+		ch.setFormatter(fmt)
+		logger.addHandler(ch)
+
+		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}"
+		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+		job_dir = os.path.dirname(input.job_description)
+		local_dir = os.path.abspath(os.path.dirname(output.done))
+		step_log_file = os.path.join(job_dir, "simulation_steps.log")
+
+		logger.info("Starting MD execution phase for target: %s", target_id)
+
+		if not os.path.exists(step_log_file):
+			log_sim_step("INIT", step_log_file, f"Target: {target_id}")
+		else:
+			log_sim_step("RESUME_WORKFLOW", step_log_file, f"Workflow checked target: {target_id}")
+
+		try:
+			with open(input.job_description, "r") as f:
+				job_description = f.read().strip()
+			# HPC specific code placeholder
+			ssh_target = f"{HPC_USER}@{HPC_HOST}"
+			clean_base = HPC_REMOTE_BASE.lstrip("~/")
+			remote_dir = os.path.join(
+				clean_base,
+				f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns",
+			)
+			job_name = (
+				f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
+			)
+			job_script = os.path.basename(input.job_description)
+
+			log_sim_step("EXEC_MODE", step_log_file, f"HPC execution target ({ssh_target})")
+
+			# 1. Check remote completion upfront
+			check_cmd = [
+				"ssh",
+				ssh_target,
+				f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES || echo NO",
+			]
+			remote_done = (
+				subprocess.check_output(check_cmd, text=True).strip()
+			)
+
+			if remote_done == "YES":
+				logger.info(
+					"🎉 Remote simulation already finished! (Found %s.gro"
+					" on HPC)",
+					prefix,
+				)
+				log_sim_step(
+					"CHECK_REMOTE",
+					step_log_file,
+					f"Simulation finished ({prefix}.gro present)",
+				)
+			else:
+				# 2. Check if job is active in queue (Returns Job ID and State)
+				squeue_cmd = [
 					"ssh",
 					ssh_target,
-					f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES || echo NO",
+					f"squeue -u {HPC_USER} -n {job_name} -h -o '%i %t'",
 				]
-				remote_done = (
-					subprocess.check_output(check_cmd, text=True).strip()
+				q_res = subprocess.run(
+					squeue_cmd, capture_output=True, text=True, check=False
 				)
+				q_out = q_res.stdout.strip()
 
-				if remote_done == "YES":
+				job_id = None
+				if q_out:
+					# Extract Job ID if already running/pending
+					job_id = q_out.split()[0]
 					logger.info(
-						"🎉 Remote simulation already finished! (Found %s.gro"
-						" on HPC)",
-						prefix,
+						"⏳ Slurm Job '%s' already active in queue (Job"
+						" ID: %s).",
+						job_name,
+						job_id,
 					)
 					log_sim_step(
-						"CHECK_REMOTE",
-						f"Simulation finished ({prefix}.gro present)",
+						"SLURM_ACTIVE",
+						step_log_file,
+						f"Job ID {job_id} running/queued on HPC",
 					)
 				else:
-					# 2. Check if job is active in queue (Returns Job ID and State)
-					squeue_cmd = [
+					logger.info(
+						"🚀 Submitting new Slurm job to Komondor (%s)...",
+						ssh_target,
+					)
+					submit_cmd = [
 						"ssh",
 						ssh_target,
-						f"squeue -u {HPC_USER} -n {job_name} -h -o '%i %t'",
+						f"cd '{remote_dir}' && [ -f JOB.tar.gz ] && tar"
+						f" -xzf JOB.tar.gz && sbatch {job_script}",
 					]
-					q_res = subprocess.run(
-						squeue_cmd, capture_output=True, text=True, check=False
+					sub_res = subprocess.run(
+						submit_cmd,
+						capture_output=True,
+						text=True,
+						check=False,
 					)
-					q_out = q_res.stdout.strip()
 
-					job_id = None
-					if q_out:
-						# Extract Job ID if already running/pending
-						job_id = q_out.split()[0]
+					if (
+						sub_res.returncode == 0
+						and "Submitted batch job" in sub_res.stdout
+					):
+						job_id = sub_res.stdout.strip().split()[-1]
 						logger.info(
-							"⏳ Slurm Job '%s' already active in queue (Job"
-							" ID: %s).",
-							job_name,
+							"✅ Slurm job successfully submitted!"
+							" Assigned Job ID: %s",
 							job_id,
 						)
 						log_sim_step(
-							"SLURM_ACTIVE",
-							f"Job ID {job_id} running/queued on HPC",
+							"SLURM_SUBMIT",
+							step_log_file,
+							f"Submitted batch job ID: {job_id}",
 						)
 					else:
-						logger.info(
-							"🚀 Submitting new Slurm job to Komondor (%s)...",
-							ssh_target,
+						logger.error(
+							"❌ Failed to submit Slurm job: %s",
+							sub_res.stderr,
 						)
-						submit_cmd = [
-							"ssh",
-							ssh_target,
-							f"cd '{remote_dir}' && [ -f JOB.tar.gz ] && tar"
-							f" -xzf JOB.tar.gz && sbatch {job_script}",
-						]
-						sub_res = subprocess.run(
-							submit_cmd,
-							capture_output=True,
-							text=True,
-							check=False,
+						log_sim_step(
+							"SLURM_FAILED",
+							step_log_file,
+							f"Submission failed: {sub_res.stderr.strip()}",
+						)
+						raise RuntimeError(
+							f"Slurm sbatch submission failed: {sub_res.stderr}"
 						)
 
-						if (
-							sub_res.returncode == 0
-							and "Submitted batch job" in sub_res.stdout
-						):
-							job_id = sub_res.stdout.strip().split()[-1]
-							logger.info(
-								"✅ Slurm job successfully submitted!"
-								" Assigned Job ID: %s",
-								job_id,
-							)
-							log_sim_step(
-								"SLURM_SUBMIT",
-								f"Submitted batch job ID: {job_id}",
-							)
-						else:
-							logger.error(
-								"❌ Failed to submit Slurm job: %s",
-								sub_res.stderr,
-							)
-							log_sim_step(
-								"SLURM_FAILED",
-								f"Submission failed: {sub_res.stderr.strip()}",
-							)
-							raise RuntimeError(
-								f"Slurm sbatch submission failed: {sub_res.stderr}"
-							)
+				# 3. Monitor Slurm Execution Loop
+				if job_id:
+					logger.info("Monitoring Slurm Job %s...", job_id)
+					last_progress_msg = ""
 
-					# 3. Monitor Slurm Execution Loop
-					if job_id:
-						logger.info("Monitoring Slurm Job %s...", job_id)
-						last_progress_msg = ""
-
-						while True:
-							# Query job state safely (check=False avoids CalledProcessError when job finishes)
-							if job_id and str(job_id).isdigit():
-								check_q = [
-									"ssh",
-									ssh_target,
-									f"squeue -j {job_id} -h -o '%t'",
-								]
-								q_check = subprocess.run(
-									check_q,
-									capture_output=True,
-									text=True,
-									check=False,
+					while True:
+						# Query job state safely (check=False avoids CalledProcessError when job finishes)
+						if job_id and str(job_id).isdigit():
+							check_q = [
+								"ssh",
+								ssh_target,
+								f"squeue -j {job_id} -h -o '%t'",
+							]
+							q_check = subprocess.run(
+								check_q,
+								capture_output=True,
+								text=True,
+								check=False,
+							)
+						
+							# Clean stdout: take only the first token (e.g. "R" or "PD")
+							stdout_clean = q_check.stdout.strip()
+							job_state = stdout_clean.split()[0] if stdout_clean else ""
+						
+							if not job_state:
+								logger.info(
+									"Job %s left the queue. Verifying completion...",
+									job_id,
 								)
-							
-								# Clean stdout: take only the first token (e.g. "R" or "PD")
-								stdout_clean = q_check.stdout.strip()
-								job_state = stdout_clean.split()[0] if stdout_clean else ""
-							
-								if not job_state:
-									logger.info(
-										"Job %s left the queue. Verifying completion...",
-										job_id,
+								break  # Job completed or died; exit polling loop
+						
+							if job_state == "R":
+								progress = get_remote_gromacs_progress(ssh_target, remote_dir, prefix)
+								if progress and progress != last_progress_msg:
+									log_sim_step(
+										"HEARTBEAT",
+										step_log_file,
+										f"Job {job_id} running - {progress}",
 									)
-									break  # Job completed or died; exit polling loop
-							
-								if job_state == "R":
-									progress = get_remote_gromacs_progress(ssh_target, remote_dir, prefix)
-									if progress and progress != last_progress_msg:
-										log_sim_step(
-											"HEARTBEAT",
-											f"Job {job_id} running - {progress}",
-										)
-										last_progress_msg = progress
-									else:
-										log_sim_step(
-											"HEARTBEAT",
-											f"Job {job_id} actively executing on HPC",
-										)
+									last_progress_msg = progress
 								else:
 									log_sim_step(
 										"HEARTBEAT",
-										f"Job {job_id} queued (State: {job_state})",
+										step_log_file,
+										f"Job {job_id} actively executing on HPC",
 									)
+							else:
+								log_sim_step(
+									"HEARTBEAT",
+									step_log_file,
+									f"Job {job_id} queued (State: {job_state})",
+								)
 
-							time.sleep(180)  # Poll every 3 minutes
+						#time.sleep(180)  # Poll every 3 minutes
+						time.sleep(900)  # Poll every 15 minutes # HPC Gods appreciate
 
-						# 4. Final Verification: Confirm simulation produced output
-						post_check = [
-							"ssh",
-							ssh_target,
-							f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES"
-							" || echo NO",
-						]
-						final_done = (
-							subprocess.check_output(post_check, text=True)
-							.strip()
+					# 4. Final Verification: Confirm simulation produced output
+					post_check = [
+						"ssh",
+						ssh_target,
+						f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES"
+						" || echo NO",
+					]
+					final_done = (
+						subprocess.check_output(post_check, text=True)
+						.strip()
+					)
+
+					if final_done == "YES":
+						log_sim_step(
+							"SLURM_FINISHED",
+							step_log_file,
+							f"Slurm Job {job_id} completed successfully",
+						)
+					else:
+						log_sim_step(
+							"SLURM_FAILED",
+							step_log_file,
+							f"Slurm Job {job_id} ended without producing"
+							f" {prefix}.gro",
+						)
+						raise RuntimeError(
+							f"HPC Job {job_id} terminated unexpectedly"
+							f" ({prefix}.gro missing)."
 						)
 
-						if final_done == "YES":
-							log_sim_step(
-								"SLURM_FINISHED",
-								f"Slurm Job {job_id} completed successfully",
-							)
-						else:
-							log_sim_step(
-								"SLURM_FAILED",
-								f"Slurm Job {job_id} ended without producing"
-								f" {prefix}.gro",
-							)
-							raise RuntimeError(
-								f"HPC Job {job_id} terminated unexpectedly"
-								f" ({prefix}.gro missing)."
-							)
-
-				# Sync and retrieve results locally
-				logger.info("📦 Archiving and retrieving simulation artifacts from HPC...")
-				log_sim_step("RETRIEVE_START", "Fetching remote output files via rsync")
+			# Sync and retrieve results locally
+			logger.info("📦 Archiving and retrieving simulation artifacts from HPC...")
+			log_sim_step("RETRIEVE_START", step_log_file, "Fetching remote output files via rsync")
 
 
+			shell(f"""
+				SSH_TARGET="{ssh_target}"
+				REMOTE_DIR="{remote_dir}"
+				PREFIX="{prefix}"
+				LOCAL_DIR="{local_dir}"
+				LOG_FILE="{log_path}"
 
-				shell(f"""
-					SSH_TARGET="{ssh_target}"
-					REMOTE_DIR="{remote_dir}"
-					PREFIX="{prefix}"
-					LOCAL_DIR="{local_dir}"
-					LOG_FILE="{log_path}"
+				ssh "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz $PREFIX.*" >> "$LOG_FILE" 2>&1
+				rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
+				mkdir -p "$LOCAL_DIR/md_results"
+				tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/md_results"
 
-					ssh "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz $PREFIX.*" >> "$LOG_FILE" 2>&1
-					rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
-					mkdir "$LOCAL_DIR/md_results"
-					tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/md_results"
+				# I don't want to bother with this yet.
+				#[ -f "$LOCAL_DIR/$PREFIX.xtc" ] && ln -sf "$PREFIX.xtc" "$LOCAL_DIR/md.xtc"
+				#[ -f "$LOCAL_DIR/$PREFIX.tpr" ] && ln -sf "$PREFIX.tpr" "$LOCAL_DIR/md.tpr"
 
-					# I don't want to bother with this yet.
-					#[ -f "$LOCAL_DIR/$PREFIX.xtc" ] && ln -sf "$PREFIX.xtc" "$LOCAL_DIR/md.xtc"
-					#[ -f "$LOCAL_DIR/$PREFIX.tpr" ] && ln -sf "$PREFIX.tpr" "$LOCAL_DIR/md.tpr"
+				rm -f "$LOCAL_DIR/md_results.tar.gz"
+				ssh "$SSH_TARGET" "rm -f '$REMOTE_DIR/md_results.tar.gz'" >> "$LOG_FILE" 2>&1
+			""")
 
-					rm -f "$LOCAL_DIR/md_results.tar.gz"
-					ssh "$SSH_TARGET" "rm -f '$REMOTE_DIR/md_results.tar.gz'" >> "$LOG_FILE" 2>&1
-				""")
+			logger.info(f"MD DATA ACQUIRED CHECK @ {local_dir}/md_results")
 
-				log_sim_step("RETRIEVE_COMPLETE", "Downloaded, extracted, and cleaned up md_results.tar.gz")
+			log_sim_step("RETRIEVE_COMPLETE", step_log_file, "Downloaded, extracted, and cleaned up md_results.tar.gz")
 
 			# Sentinel output
 			with open(output.done, "w") as f:
 				f.write(f"MD simulation completed for {target_id}.\n")
 			
-			log_sim_step("DONE", "Pipeline rule finished successfully.")
+			log_sim_step("DONE", step_log_file, "Pipeline rule finished successfully.")
 
 		except Exception as err:
-			log_sim_step("ERROR", str(err))
+			log_sim_step("ERROR", step_log_file, str(err))
 			logger.exception("Execution failed in run_molecular_dynamics for %s: %s", target_id, str(err))
 			raise
+rule finalize_md:
+	input:
+#		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/local_md_completed.txt"
+#		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/HPC_md_completed.txt"
+		det_compute_scheduling = det_compute_scheduling
+	output:
+		#done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt"
+		#md_cpt = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.cpt"
+		#md_edr = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.edr"
+		#md_log = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.log"
+		#md_xtc = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.xtc"
+		#md_results = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results"
+		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/md_completed.txt"
+
+	run:
+		# Finalize MD: if HPC just write sentinel; if local, validate BLANK job and
+		# collect MD outputs into md_results then write sentinel file.
+		scheduling_path = f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/JOB/scheduling.yml"
+		compute_target = get_compute_target(wildcards)
+
+		# Ensure output directory exists
+		out_dir = os.path.abspath(os.path.dirname(output.done))
+		os.makedirs(out_dir, exist_ok=True)
+
+		# HPC path: nothing to fetch here (already retrieved in run_HPC_md), just write sentinel
+		if compute_target == "HPC":
+			with open(output.done, "w") as f:
+				f.write(f"MD simulation (HPC) finalized for {wildcards.pdb}/{wildcards.source}/{wildcards.model_id}\n")
+			return
+
+		# Local path: verify the JOB descriptor indicates local execution then collect files
+		if compute_target == "local":
+			job_dir = os.path.abspath(f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/JOB")
+			job_desc = os.path.join(job_dir, f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md_job.job")
+
+			if not os.path.exists(job_desc):
+				raise FileNotFoundError(f"Expected job description not found: {job_desc}")
+
+			with open(job_desc, "r") as fh:
+				content = fh.read().strip()
+
+			if content != "BLANK":
+				raise ValueError(f"Job description must be 'BLANK' for local finalize, got: '{content}'")
+
+			# Collect MD outputs into md_results
+			md_results = os.path.join(out_dir, "md_results")
+			os.makedirs(md_results, exist_ok=True)
+
+			prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+
+			# Copy files from JOB directory matching prefix
+			if os.path.isdir(job_dir):
+				for fn in os.listdir(job_dir):
+					if fn.startswith(prefix):
+						src = os.path.join(job_dir, fn)
+						dst = os.path.join(md_results, fn)
+						try:
+							shutil.copy2(src, dst)
+						except Exception:
+							# best-effort copy; continue on failure
+							pass
+
+			# Also copy common md artifacts in the parent standard_100ns directory
+			# dont do that that'd copy data from preparation
+			#parent_dir = os.path.abspath(os.path.dirname(job_dir))
+			#extra_candidates = [f"{prefix}.xtc", f"{prefix}.tpr", f"{prefix}.cpt", "md.xtc", "md.tpr", "md.cpt", "md.edr", "md.log"]
+			#for cand in extra_candidates:
+			#	src = os.path.join(parent_dir, cand)
+			#	if os.path.exists(src):
+			#		try:
+			#			shutil.copy2(src, os.path.join(md_results, os.path.basename(src)))
+			#		except Exception:
+			#			pass
+
+			# Write sentinel
+			with open(output.done, "w") as f:
+				f.write(f"MD simulation (local) finalized and artifacts collected for {wildcards.pdb}/{wildcards.source}/{wildcards.model_id}\n")
+			return
+
+		# Unknown compute target
+		raise ValueError(f"Unknown compute target when finalizing MD: {compute_target}")
+
+
+# INACTIVATE!!
+#rule run_molecular_dynamics:
+#	input:
+#		tpr_file = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.tpr",
+#		job_description = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md_job.job"
+#	output:
+#		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt"
+#	log:
+#		"logs/{pdb}/{source}/{model_id}/production_mdrun.log"
+#	params:
+#		log_abs = lambda wildcards: os.path.abspath(
+#			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/production_mdrun.log"
+#		)
+#	resources:
+#		gpu = 1
+#	run:
+#		# Setup Logger
+#		log_path = params.log_abs
+#		os.makedirs(os.path.dirname(log_path), exist_ok=True)
+#
+#		logger = logging.getLogger(f"run_md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}")
+#		logger.setLevel(logging.INFO)
+#		logger.handlers.clear()
+#
+#		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+#		fh = logging.FileHandler(log_path, mode="a")
+#		fh.setFormatter(fmt)
+#		logger.addHandler(fh)
+#
+#		ch = logging.StreamHandler()
+#		ch.setFormatter(fmt)
+#		logger.addHandler(ch)
+#
+#		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}"
+#		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+#		job_dir = os.path.dirname(input.job_description)
+#		local_dir = os.path.abspath(os.path.dirname(output.done))
+#		step_log_file = os.path.join(local_dir, "simulation_steps.log")
+#
+#
+#
+#		logger.info("Starting MD execution phase for target: %s", target_id)
+#		
+#		# Preserve first start time if log exists, or mark INIT
+#		if not os.path.exists(step_log_file):
+#			log_sim_step("INIT", f"Target: {target_id}")
+#		else:
+#			log_sim_step("RESUME_WORKFLOW", f"Workflow checked target: {target_id}")
+#
+#		try:
+#			with open(input.job_description, "r") as f:
+#				job_description = f.read().strip()
+#
+#			# -------------------------------------------------------------
+#			# LOCAL EXECUTION PATHWAY
+#			# -------------------------------------------------------------
+#			if job_description == "BLANK":
+#				logger.info("Target configured for LOCAL execution.")
+#				log_sim_step("EXEC_MODE", "Local execution requested")
+#				cpt_path = os.path.join(job_dir, f"{prefix}.cpt")
+#
+#				if os.path.exists(cpt_path):
+#					logger.info("Active checkpoint detected. Resuming local MD run...")
+#					log_sim_step("MD_RESUME", f"Resuming from checkpoint {prefix}.cpt")
+#					shell("""
+#						cd "{job_dir}"
+#						gmx mdrun -v -ntmpi 1 \
+#							-deffnm {prefix} \
+#							-cpi $(basename {cpt_path}) \
+#							-nb gpu -pme gpu >> "{log_path}" 2>&1
+#					""")
+#				else:
+#					logger.info("Launching fresh local MD run...")
+#					log_sim_step("MD_START", f"Starting fresh mdrun for {prefix}")
+#					shell("""
+#						cd "{job_dir}"
+#						gmx mdrun -v -ntmpi 1 \
+#							-deffnm {prefix} \
+#							-nb gpu -pme gpu >> "{log_path}" 2>&1
+#					""")
+#
+#				shell("""
+#					cd "{job_dir}"
+#					[ -f "{prefix}.xtc" ] && ln -sf "{prefix}.xtc" ../md.xtc
+#					[ -f "{prefix}.tpr" ] && ln -sf "{prefix}.tpr" ../md.tpr
+#				""")
+#				log_sim_step("MD_COMPLETE", "Local run finished successfully")
+#
+#			# HPC EXECUTION PATHWAY
+#			# -------------------------------------------------------------
+#			else:
+#				ssh_target = f"{HPC_USER}@{HPC_HOST}"
+#				clean_base = HPC_REMOTE_BASE.lstrip("~/")
+#				remote_dir = os.path.join(
+#					clean_base,
+#					f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns",
+#				)
+#				job_name = (
+#					f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
+#				)
+#				job_script = os.path.basename(input.job_description)
+#
+#				log_sim_step("EXEC_MODE", f"HPC execution target ({ssh_target})")
+#
+#				# 1. Check remote completion upfront
+#				check_cmd = [
+#					"ssh",
+#					ssh_target,
+#					f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES || echo NO",
+#				]
+#				remote_done = (
+#					subprocess.check_output(check_cmd, text=True).strip()
+#				)
+#
+#				if remote_done == "YES":
+#					logger.info(
+#						"🎉 Remote simulation already finished! (Found %s.gro"
+#						" on HPC)",
+#						prefix,
+#					)
+#					log_sim_step(
+#						"CHECK_REMOTE",
+#						f"Simulation finished ({prefix}.gro present)",
+#					)
+#				else:
+#					# 2. Check if job is active in queue (Returns Job ID and State)
+#					squeue_cmd = [
+#						"ssh",
+#						ssh_target,
+#						f"squeue -u {HPC_USER} -n {job_name} -h -o '%i %t'",
+#					]
+#					q_res = subprocess.run(
+#						squeue_cmd, capture_output=True, text=True, check=False
+#					)
+#					q_out = q_res.stdout.strip()
+#
+#					job_id = None
+#					if q_out:
+#						# Extract Job ID if already running/pending
+#						job_id = q_out.split()[0]
+#						logger.info(
+#							"⏳ Slurm Job '%s' already active in queue (Job"
+#							" ID: %s).",
+#							job_name,
+#							job_id,
+#						)
+#						log_sim_step(
+#							"SLURM_ACTIVE",
+#							f"Job ID {job_id} running/queued on HPC",
+#						)
+#					else:
+#						logger.info(
+#							"🚀 Submitting new Slurm job to Komondor (%s)...",
+#							ssh_target,
+#						)
+#						submit_cmd = [
+#							"ssh",
+#							ssh_target,
+#							f"cd '{remote_dir}' && [ -f JOB.tar.gz ] && tar"
+#							f" -xzf JOB.tar.gz && sbatch {job_script}",
+#						]
+#						sub_res = subprocess.run(
+#							submit_cmd,
+#							capture_output=True,
+#							text=True,
+#							check=False,
+#						)
+#
+#						if (
+#							sub_res.returncode == 0
+#							and "Submitted batch job" in sub_res.stdout
+#						):
+#							job_id = sub_res.stdout.strip().split()[-1]
+#							logger.info(
+#								"✅ Slurm job successfully submitted!"
+#								" Assigned Job ID: %s",
+#								job_id,
+#							)
+#							log_sim_step(
+#								"SLURM_SUBMIT",
+#								f"Submitted batch job ID: {job_id}",
+#							)
+#						else:
+#							logger.error(
+#								"❌ Failed to submit Slurm job: %s",
+#								sub_res.stderr,
+#							)
+#							log_sim_step(
+#								"SLURM_FAILED",
+#								f"Submission failed: {sub_res.stderr.strip()}",
+#							)
+#							raise RuntimeError(
+#								f"Slurm sbatch submission failed: {sub_res.stderr}"
+#							)
+#
+#					# 3. Monitor Slurm Execution Loop
+#					if job_id:
+#						logger.info("Monitoring Slurm Job %s...", job_id)
+#						last_progress_msg = ""
+#
+#						while True:
+#							# Query job state safely (check=False avoids CalledProcessError when job finishes)
+#							if job_id and str(job_id).isdigit():
+#								check_q = [
+#									"ssh",
+#									ssh_target,
+#									f"squeue -j {job_id} -h -o '%t'",
+#								]
+#								q_check = subprocess.run(
+#									check_q,
+#									capture_output=True,
+#									text=True,
+#									check=False,
+#								)
+#							
+#								# Clean stdout: take only the first token (e.g. "R" or "PD")
+#								stdout_clean = q_check.stdout.strip()
+#								job_state = stdout_clean.split()[0] if stdout_clean else ""
+#							
+#								if not job_state:
+#									logger.info(
+#										"Job %s left the queue. Verifying completion...",
+#										job_id,
+#									)
+#									break  # Job completed or died; exit polling loop
+#							
+#								if job_state == "R":
+#									progress = get_remote_gromacs_progress(ssh_target, remote_dir, prefix)
+#									if progress and progress != last_progress_msg:
+#										log_sim_step(
+#											"HEARTBEAT",
+#											f"Job {job_id} running - {progress}",
+#										)
+#										last_progress_msg = progress
+#									else:
+#										log_sim_step(
+#											"HEARTBEAT",
+#											f"Job {job_id} actively executing on HPC",
+#										)
+#								else:
+#									log_sim_step(
+#										"HEARTBEAT",
+#										f"Job {job_id} queued (State: {job_state})",
+#									)
+#
+#							time.sleep(180)  # Poll every 3 minutes
+#
+#						# 4. Final Verification: Confirm simulation produced output
+#						post_check = [
+#							"ssh",
+#							ssh_target,
+#							f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES"
+#							" || echo NO",
+#						]
+#						final_done = (
+#							subprocess.check_output(post_check, text=True)
+#							.strip()
+#						)
+#
+#						if final_done == "YES":
+#							log_sim_step(
+#								"SLURM_FINISHED",
+#								f"Slurm Job {job_id} completed successfully",
+#							)
+#						else:
+#							log_sim_step(
+#								"SLURM_FAILED",
+#								f"Slurm Job {job_id} ended without producing"
+#								f" {prefix}.gro",
+#							)
+#							raise RuntimeError(
+#								f"HPC Job {job_id} terminated unexpectedly"
+#								f" ({prefix}.gro missing)."
+#							)
+#
+#				# Sync and retrieve results locally
+#				logger.info("📦 Archiving and retrieving simulation artifacts from HPC...")
+#				log_sim_step("RETRIEVE_START", "Fetching remote output files via rsync")
+#
+#
+#				shell(f"""
+#					SSH_TARGET="{ssh_target}"
+#					REMOTE_DIR="{remote_dir}"
+#					PREFIX="{prefix}"
+#					LOCAL_DIR="{local_dir}"
+#					LOG_FILE="{log_path}"
+#
+#					ssh "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz $PREFIX.*" >> "$LOG_FILE" 2>&1
+#					rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
+#					mkdir -p "$LOCAL_DIR/md_results"
+#					tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/md_results"
+#
+#					# I don't want to bother with this yet.
+#					#[ -f "$LOCAL_DIR/$PREFIX.xtc" ] && ln -sf "$PREFIX.xtc" "$LOCAL_DIR/md.xtc"
+#					#[ -f "$LOCAL_DIR/$PREFIX.tpr" ] && ln -sf "$PREFIX.tpr" "$LOCAL_DIR/md.tpr"
+#
+#					rm -f "$LOCAL_DIR/md_results.tar.gz"
+#					ssh "$SSH_TARGET" "rm -f '$REMOTE_DIR/md_results.tar.gz'" >> "$LOG_FILE" 2>&1
+#				""")
+#
+#				logger.info(f"MD DATA ACQUIRED CHECK @ {local_dir}/md_results")
+#
+#				log_sim_step("RETRIEVE_COMPLETE", "Downloaded, extracted, and cleaned up md_results.tar.gz")
+#
+#			# Sentinel output
+#			with open(output.done, "w") as f:
+#				f.write(f"MD simulation completed for {target_id}.\n")
+#			
+#			log_sim_step("DONE", "Pipeline rule finished successfully.")
+#
+#		except Exception as err:
+#			log_sim_step("ERROR", str(err))
+#			logger.exception("Execution failed in run_molecular_dynamics for %s: %s", target_id, str(err))
+#			raise
 
 #rule md_repackaging:
 
@@ -805,45 +1296,45 @@ rule run_molecular_dynamics:
 #         "../scripts/cluster_trajectory.py"
 
 # --- STEP 6: TRAJECTORY CLEANING & PBC WRAPPING CORRECTION ---
-rule pbc_correction_and_extract:
-	input:
-		md_checkpoint_guard = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt",
-		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md.xtc",
-		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md.tpr",
-	output:
-		tar = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/FRAMES_compressed.tar.gz"
-	log:
-		"logs/{pdb}/{source}/{model_id}/trjconv_pbc.log"
-	shell:
-		"""
-		# 1. Recenter molecular unity boundaries
-		echo "Protein" | gmx trjconv -f {input.xtc_md} -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc -pbc mol -ur compact > {log} 2>&1
-		
-		# 2. Fit rotational and translational structural drift
-		echo "Protein Protein Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc -center -fit rot+trans >> {log} 2>&1
-		
-		# 3. Chop trajectory into individual PDB frames
-		mkdir -p results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/FRAMES
-		echo "Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/FRAMES/frame.pdb -s {input.tpr_md} -sep >> {log} 2>&1
-		
-		# Compress and archive individual coordinate files
-		tar -czf {output.tar} -C results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id} FRAMES >> {log} 2>&1
-		
-		# Clean up massive intermediate trajectories to preserve space
-		# rm -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc
-		"""
-
-
-# --- STEP 7: AUTOMATED PYMOL MOVIE GENERATION ---
-rule generate_pymol_movie:
-	input:
-		tar = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/FRAMES_compressed.tar.gz"
-	output:
-		movie = "results/gromacs/{pdb}/{source}/{model_id}/movies/100ns_md_trajectory.mov"
-	log:
-		"logs/{pdb}/{source}/{model_id}/pymol_render.log"
-	shell:
-		"python scripts/render_pymol_movie.py {input.tar} {output.movie} > {log} 2>&1"
+#rule pbc_correction_and_extract:
+#	input:
+#		md_checkpoint_guard = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_completed.txt",
+#		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md.xtc",
+#		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md.tpr",
+#	output:
+#		tar = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/FRAMES_compressed.tar.gz"
+#	log:
+#		"logs/{pdb}/{source}/{model_id}/trjconv_pbc.log"
+#	shell:
+#		"""
+#		# 1. Recenter molecular unity boundaries
+#		echo "Protein" | gmx trjconv -f {input.xtc_md} -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc -pbc mol -ur compact > {log} 2>&1
+#		
+#		# 2. Fit rotational and translational structural drift
+#		echo "Protein Protein Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc -center -fit rot+trans >> {log} 2>&1
+#		
+#		# 3. Chop trajectory into individual PDB frames
+#		mkdir -p results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/FRAMES
+#		echo "Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/FRAMES/frame.pdb -s {input.tpr_md} -sep >> {log} 2>&1
+#		
+#		# Compress and archive individual coordinate files
+#		tar -czf {output.tar} -C results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id} FRAMES >> {log} 2>&1
+#		
+#		# Clean up massive intermediate trajectories to preserve space
+#		# rm -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc
+#		"""
+#
+#
+## --- STEP 7: AUTOMATED PYMOL MOVIE GENERATION ---
+#rule generate_pymol_movie:
+#	input:
+#		tar = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/FRAMES_compressed.tar.gz"
+#	output:
+#		movie = "results/gromacs/{pdb}/{source}/{model_id}/movies/100ns_md_trajectory.mov"
+#	log:
+#		"logs/{pdb}/{source}/{model_id}/pymol_render.log"
+#	shell:
+#		"python scripts/render_pymol_movie.py {input.tar} {output.movie} > {log} 2>&1"
 		
 # Rule 4: Run Quantum Mechanical / Excited-State Calculations on Snapshots
 # rule run_quantum_mechanics:

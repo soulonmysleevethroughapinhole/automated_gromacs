@@ -20,7 +20,7 @@ def parse_md_logs():
     table.add_column("Performance", style="magenta")
     table.add_column("ETA", style="bold yellow")
 
-    step_logs = sorted(glob.glob("results/gromacs/*/*/*/standard_100ns/simulation_steps.log"))
+    step_logs = sorted(glob.glob("results/gromacs/*/*/*/standard_100ns/JOB/simulation_steps.log"))
 
     if not step_logs:
         table.add_row("No simulations found", "-", "-", "-", "-", "-", "-")
