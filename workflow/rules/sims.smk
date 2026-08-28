@@ -331,6 +331,10 @@ rule create_md_job:
 				deffnm = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
 
 				# Generate Slurm Batch Script
+
+##SBATCH --nodes=4
+##SBATCH --ntasks-per-node=128
+#SBATCH --cpus-per-task=1
 				slurm_script = f"""#! /bin/bash
 # Komondor Slurm Template for Gromacs 2025.4 (Compiled: MPI noCUDA)
 # Run: CPU, MPI
@@ -344,6 +348,7 @@ rule create_md_job:
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=128
 #SBATCH --cpus-per-task=1
+
 #SBATCH --time={HPC_TIME}
 #SBATCH --no-requeue
 #SBATCH --exclusive
@@ -462,6 +467,10 @@ def get_compute_target(wildcards):
 		with open(scheduling_file, 'r') as f:
 			data = yaml.safe_load(f) or {}
 			return data.get("COMPUTE", config.get(config.get("default_compute_target", "local")))
+	#NOTE: ERROR SOURCE
+	# if the JOB folder is nuked
+	# then HPC jobs will revert to local due to this!!!
+
 	return config.get("default_compute_target", "local")
 
 def det_compute_scheduling(wildcards):
@@ -615,6 +624,9 @@ rule run_HPC_md:
 		log_abs = lambda wildcards: os.path.abspath(
 			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/HPC_production_mdrun.log"
 		)
+	resources:
+		gpu = 0,     # Zero local GPUs used! Passive SSH / monitoring thread only
+		mem_mb = 500
 	run:
 		# Setup Logger
 		log_path = params.log_abs
@@ -666,6 +678,7 @@ rule run_HPC_md:
 			# 1. Check remote completion upfront
 			check_cmd = [
 				"ssh",
+				#"-o", 'BatchMode=yes',
 				ssh_target,
 				f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES || echo NO",
 			]
