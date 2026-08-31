@@ -27,7 +27,7 @@ def read_tail(file_path: str, max_bytes: int = 32768) -> list[str]:
 
 
 def format_eta(remaining_seconds: float) -> str:
-    """Formats estimated time remaining into clean clock or calendar targets."""
+    """Formats calculated time remaining into clean clock or calendar targets."""
     if remaining_seconds <= 0:
         return "[bold green]Done[/bold green]"
     
@@ -42,6 +42,23 @@ def format_eta(remaining_seconds: float) -> str:
         return eta_dt.strftime("%b %d %H:%M")
 
 
+def format_gmx_will_finish(will_finish_str: str) -> str:
+    """Standardizes raw GROMACS 'will finish' dates into clean display strings."""
+    if not will_finish_str:
+        return "--"
+    try:
+        dt = datetime.strptime(will_finish_str.strip(), "%a %b %d %H:%M:%S %Y")
+        now = datetime.now()
+        if dt.date() == now.date():
+            return dt.strftime("Today %H:%M:%S")
+        elif dt.date() == (now + timedelta(days=1)).date():
+            return dt.strftime("Tomorrow %H:%M:%S")
+        else:
+            return dt.strftime("%b %d %H:%M:%S")
+    except ValueError:
+        return will_finish_str.strip()
+
+
 def parse_md_logs() -> Table:
     table = Table(title="Live GROMACS MD Simulation Tracker (100 ns Runs)", expand=True)
     table.add_column("System / Replicate", style="cyan", no_wrap=True)
@@ -49,15 +66,16 @@ def parse_md_logs() -> Table:
     table.add_column("First Started", style="blue")
     table.add_column("Last Active", style="dim white")
     table.add_column("Sim Time", style="green")
-    table.add_column("Progress", style="yellow")
+    table.add_column("Progress (Steps / Total)", style="yellow")
     table.add_column("Performance", style="magenta")
-    table.add_column("ETA", style="bold yellow")
+    table.add_column("ETA (Est.)", style="bold yellow")
+    table.add_column("Will Finish (GMX)", style="bold cyan")
 
     # Target path matching: results/gromacs/<PDB>/<MODEL>/<REP>/standard_100ns/JOB/
     step_logs = sorted(glob.glob("results/gromacs/*/*/*/standard_100ns/JOB/simulation_steps.log"))
 
     if not step_logs:
-        table.add_row("No simulations found", "-", "-", "-", "-", "-", "-", "-")
+        table.add_row("No simulations found", "-", "-", "-", "-", "-", "-", "-", "-")
         return table
 
     now = datetime.now()
@@ -102,35 +120,75 @@ def parse_md_logs() -> Table:
                 re.search(r"SLURM", full_log_text, re.IGNORECASE) or
                 "komondor" in full_log_text.lower()
             )
-            
             target_str = "[cyan]HPC[/cyan]" if is_hpc else "[green]Local[/green]"
 
-            # 4. Step Code & Status Context
+            # 4. Step Code & Queue Context Search (Bottom-Up)
             step_match = re.search(r"\[STEP:\s*([^\]]+)\]\s*(.*)", latest_line)
             step_code = step_match.group(1) if step_match else "UNKNOWN"
             step_details = step_match.group(2) if step_match else ""
 
-            # Check if current state explicitly indicates queued on HPC
-            is_queued = "State: PD" in step_details or (step_code == "HEARTBEAT" and "PD" in step_details)
+            hb_step_val = None
+            hb_ns = None
+            hb_dt = None
+            gmx_will_finish_raw = None
+            is_running = False
+
+            # Scan wrapper log lines bottom-up for active state and heartbeat metrics
+            for line in reversed(lines):
+                if "running -" in line:
+                    is_running = True
+
+                    # Priority 1: Extract "will finish" string if available in this line
+                    step_finish_match = re.search(
+                        r"step\s+(\d+),\s+will finish\s+(.*)", line, re.IGNORECASE
+                    )
+                    if step_finish_match:
+                        if hb_step_val is None:
+                            hb_step_val = int(step_finish_match.group(1))
+                            hb_ns = (hb_step_val * DT_PS) / 1000.0
+                        if gmx_will_finish_raw is None:
+                            gmx_will_finish_raw = step_finish_match.group(2).strip()
+
+                    # Priority 2: Extract standard ns heartbeat line
+                    ns_match = re.search(r"running\s*-\s*([\d\.]+)\s*ns", line, re.IGNORECASE)
+                    if ns_match and hb_ns is None:
+                        hb_ns = float(ns_match.group(1))
+                        hb_step_val = int((hb_ns * 1000.0) / DT_PS)
+
+                    # Extract line timestamp if not set
+                    if hb_dt is None:
+                        dt_m = re.search(r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]", line)
+                        if dt_m:
+                            hb_dt = datetime.strptime(dt_m.group(1), "%Y-%m-%d %H:%M:%S")
+
+                    # Stop scanning once both step metrics and completion estimates are found
+                    if hb_step_val is not None and gmx_will_finish_raw is not None:
+                        break
+
+            # Job is strictly queued ONLY if no running heartbeats exist and latest line has State: PD
+            is_queued = (not is_running) and ("State: PD" in step_details or "PD" in step_code)
 
             # 5. GROMACS Log Direct Extraction (Production Only)
             sim_dir = os.path.dirname(log_path)
-            
-            # Target ONLY production MD logs (*_md.log or logs within JOB/)
             gmx_logs = [
                 f for f in glob.glob(os.path.join(sim_dir, "*_md.log")) + glob.glob(os.path.join(sim_dir, "*.log"))
                 if os.path.basename(f) != "simulation_steps.log" and not os.path.basename(f).startswith(("cg", "st"))
             ]
 
             gmx_ns = None
+            gmx_step_val = None
             checkpoints = []
 
-            # Skip production log parsing if the job is explicitly pending in Slurm
             if gmx_logs and not is_queued:
                 for glog in gmx_logs:
                     glines = read_tail(glog, max_bytes=65536)
                     for idx, line in enumerate(reversed(glines)):
-                        # Match checkpoint write
+                        # Look for native GROMACS "will finish" printouts directly inside the .log file
+                        if gmx_will_finish_raw is None:
+                            wf_match = re.search(r"will finish\s+(.*)", line, re.IGNORECASE)
+                            if wf_match:
+                                gmx_will_finish_raw = wf_match.group(1).strip()
+
                         cp_match = re.search(r"Writing checkpoint, step (\d+) at (.*)", line)
                         if cp_match:
                             step_val = int(cp_match.group(1))
@@ -141,7 +199,6 @@ def parse_md_logs() -> Table:
                             except ValueError:
                                 pass
 
-                        # Match step/time block
                         if gmx_ns is None and "Step" in line and "Time" in line:
                             actual_idx = len(glines) - 1 - idx
                             if actual_idx + 1 < len(glines):
@@ -149,8 +206,8 @@ def parse_md_logs() -> Table:
                                 parts_val = val_line.split()
                                 if len(parts_val) >= 2 and parts_val[0].isdigit():
                                     try:
-                                        time_ps = float(parts_val[1])
-                                        gmx_ns = time_ps / 1000.0
+                                        gmx_step_val = int(parts_val[0])
+                                        gmx_ns = float(parts_val[1]) / 1000.0
                                     except ValueError:
                                         pass
 
@@ -159,44 +216,45 @@ def parse_md_logs() -> Table:
                     if checkpoints or gmx_ns is not None:
                         break
 
-            # 6. Extract Wrapper Heartbeats (Fallback)
-            hb_ns = None
-            hb_dt = None
-            if not is_queued:
-                for line in reversed(lines):
-                    hb_match = re.search(
-                        r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\].*?running\s*-\s*([\d\.]+)\s*ns",
-                        line,
-                        re.IGNORECASE
-                    )
-                    if hb_match:
-                        hb_dt = datetime.strptime(hb_match.group(1), "%Y-%m-%d %H:%M:%S")
-                        hb_ns = float(hb_match.group(2))
-                        break
-
-            # 7. Priority Metrics Evaluation
+            # 6. Priority Metrics Consolidation
             current_ns = gmx_ns if gmx_ns is not None else hb_ns
+            current_step = gmx_step_val if gmx_step_val is not None else hb_step_val
 
+            if current_step is None and current_ns is not None:
+                current_step = int((current_ns * 1000.0) / DT_PS)
+
+            # Format Progress string as Steps / Total Steps (%)
+            if current_step is not None:
+                pct = min(100.0, (current_step / TOTAL_STEPS) * 100.0)
+                progress_str = f"{current_step:,} / {TOTAL_STEPS:,} ({pct:.1f}%)"
+            else:
+                progress_str = f"0 / {TOTAL_STEPS:,} (0.0%)"
+
+            will_finish_str = format_gmx_will_finish(gmx_will_finish_raw)
+
+            # 7. State & Row Rendering
             if is_queued:
                 job_match = re.search(r"Job\s*(\d+)", step_details, re.IGNORECASE)
                 job_str = f"Job {job_match.group(1)}" if job_match else "Queued"
                 sim_time_str = f"0.0 / {TOTAL_NS:.0f} ns"
-                progress_str = "0.0%"
+                progress_str = f"0 / {TOTAL_STEPS:,} (0.0%)"
                 perf_str = f"Queued ({job_str})"
                 eta_str = "[yellow]Pending (PD)[/yellow]"
+                will_finish_str = "--"
 
             elif step_code in ["DONE", "SIMULATION_SUMMARY"] or (current_ns and current_ns >= TOTAL_NS):
                 sim_time_str = f"{TOTAL_NS:.1f} / {TOTAL_NS:.0f} ns"
-                progress_str = "100.0%"
+                progress_str = f"{TOTAL_STEPS:,} / {TOTAL_STEPS:,} (100.0%)"
                 perf_str = "[green]Finished[/green]"
                 eta_str = "[bold green]Done[/bold green]"
+                will_finish_str = "[bold green]Done[/bold green]"
 
             elif len(checkpoints) >= 2:
                 latest_step, latest_time = checkpoints[0]
                 prev_step, prev_time = checkpoints[1]
                 
                 sim_ns = current_ns if current_ns is not None else (latest_step * DT_PS / 1000.0)
-                pct = min(100.0, (sim_ns / TOTAL_NS) * 100.0)
+                sim_time_str = f"{sim_ns:.2f} / {TOTAL_NS:.0f} ns"
 
                 step_delta = latest_step - prev_step
                 delta_t = (latest_time - prev_time).total_seconds()
@@ -211,18 +269,13 @@ def parse_md_logs() -> Table:
                 elif is_stale:
                     perf_str = "[bold yellow]STALLED[/bold yellow]"
                     eta_str = "Inactive"
+                    will_finish_str = "Inactive"
                 else:
                     perf_str = "Calculating..."
                     eta_str = "N/A"
 
-                sim_time_str = f"{sim_ns:.2f} / {TOTAL_NS:.0f} ns"
-                progress_str = f"{pct:.1f}%"
-
             elif current_ns is not None:
-                pct = min(100.0, (current_ns / TOTAL_NS) * 100.0)
                 sim_time_str = f"{current_ns:.2f} / {TOTAL_NS:.0f} ns"
-                progress_str = f"{pct:.1f}%"
-
                 ref_dt = hb_dt if hb_dt else last_active_dt
                 elapsed_sec = (ref_dt - first_start_dt).total_seconds()
 
@@ -234,13 +287,14 @@ def parse_md_logs() -> Table:
                 elif is_stale:
                     perf_str = "[bold yellow]STALLED[/bold yellow]"
                     eta_str = "Inactive"
+                    will_finish_str = "Inactive"
                 else:
                     perf_str = "Calculating..."
                     eta_str = "Running"
 
             else:
                 sim_time_str = f"0.0 / {TOTAL_NS:.0f} ns"
-                progress_str = "0.0%"
+                progress_str = f"0 / {TOTAL_STEPS:,} (0.0%)"
 
                 if "SLURM" in step_code or "EXEC_MODE" in step_code or step_code == "HEARTBEAT":
                     job_match = re.search(r"Job\s*(\d+)", step_details, re.IGNORECASE)
@@ -265,7 +319,8 @@ def parse_md_logs() -> Table:
                 sim_time_str,
                 progress_str,
                 perf_str,
-                eta_str
+                eta_str,
+                will_finish_str
             )
 
         except Exception:

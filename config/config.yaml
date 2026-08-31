@@ -10,6 +10,19 @@
 #default_compute_target: komondor # local, hpc
 default_compute_target: local # local, hpc
 
+protocols:
+  standard_100ns:
+    mdp_file: "config/gromacs_settings/interruptable_config_ultimate/md.mdp"
+    length_ns: 100
+    default_compute: "local"
+  simulated_annealing:
+    mdp_file: "config/gromacs_settings/simulated_annealation/anneal.mdp"
+    length_ns: 1000
+    default_compute: "HPC"  # Shorter runs can be kept local!
+  extended_1000ns:
+    mdp_file: "config/gromacs_settings/extended/extended_1000ns.mdp"
+    length_ns: 1000
+    default_compute: "HPC"
 
 #####################################
 ###### PDBs to prep and screen ######
