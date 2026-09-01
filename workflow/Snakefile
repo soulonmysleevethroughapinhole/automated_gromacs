@@ -24,7 +24,9 @@ def resolve_targets(pdb, source, model):
 
 	# Default behavior: If no custom jobs requested, queue standard 100ns baseline
 	if not custom_jobs:
-		return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/md_completed.txt"]
+		#return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/md_completed.txt"]
+		return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"]
+
 	
 	job_paths = []
 	for job in custom_jobs:

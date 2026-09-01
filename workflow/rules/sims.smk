@@ -528,9 +528,9 @@ rule create_md_job:
 				logger.info("Deploying archive to remote target %s:%s", ssh_target, remote_dir)
 
 				shell("""
-					ssh {ssh_target} "mkdir -p '{remote_dir}'"
-					rsync -avz "{job_targz}" "{ssh_target}:{remote_dir}/JOB.tar.gz"
-					ssh {ssh_target} "test -f '{remote_dir}/JOB.tar.gz' && echo 'Remote payload verified at {remote_dir}/JOB.tar.gz'"
+					ssh -o BatchMode=yes {ssh_target} "mkdir -p '{remote_dir}'"
+					rsync -e "ssh -o BatchMode=yes" -avz "{job_targz}" "{ssh_target}:{remote_dir}/JOB.tar.gz"
+					ssh -o BatchMode=yes {ssh_target} "test -f '{remote_dir}/JOB.tar.gz' && echo 'Remote payload verified at {remote_dir}/JOB.tar.gz'"
 				""")
 				logger.info("Remote transfer and payload verification completed.")
 
@@ -592,7 +592,7 @@ def get_compute_target(wildcards):
 			print(f"Error reading {scheduling_file}: {e}")
 
 	# Fallback to config default if scheduling.yml is missing or unreadable
-	return config.get("default_compute_target", "HPC")
+	return config.get("default_compute_target", "local")
 
 
 def det_compute_scheduling(wildcards):
@@ -730,13 +730,14 @@ rule run_local_md:
 					""")
 
 				# Ensure md_results directory exists before linking/copying
-				md_results_dir = os.path.abspath(os.path.join(job_dir, "..", "md_results"))
-				os.makedirs(md_results_dir, exist_ok=True)
+				#md_results_dir = os.path.abspath(os.path.join(local_dir, "..", "md_results"))
+				#md_results_dir = local_dir
+				#os.makedirs(md_results_dir, exist_ok=True)
 
 				shell(f"""
 					cd "{job_dir}"
-					[ -f "{prefix}.xtc" ] && cp -f "{prefix}.xtc" "{md_results_dir}/{prefix}.xtc" || true
-					[ -f "{prefix}.tpr" ] && cp -f "{prefix}.tpr" "{md_results_dir}/{prefix}.tpr" || true
+					[ -f "{prefix}.xtc" ] && cp -f "{prefix}.xtc" "{local_dir}/{prefix}.xtc" || true
+					[ -f "{prefix}.tpr" ] && cp -f "{prefix}.tpr" "{local_dir}/{prefix}.tpr" || true
 				""")
 
 				# Write sentinel file
@@ -757,6 +758,7 @@ rule run_HPC_md:
 		tpr_file = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md.tpr",
 		job_description = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/JOB/{pdb}_{source}_{model_id}_md_job.job"
 	output:
+		#md_dir = directory("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results"),
 		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/HPC_md_completed.txt"
 	log:
 		"logs/{pdb}/{source}/{model_id}/HPC_production_mdrun.log"
@@ -769,7 +771,6 @@ rule run_HPC_md:
 		mem_mb = 500
 	run:
 		# Setup Logger
-# Setup Logger
 		log_path = params.log_abs
 		os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
@@ -927,19 +928,17 @@ rule run_HPC_md:
 			shell(f"""
 				SSH_TARGET="{ssh_target}"
 				REMOTE_DIR="{remote_dir}"
-				PREFIX="{prefix}"
 				LOCAL_DIR="{local_dir}"
 				LOG_FILE="{log_path}"
 
-				# Archive all potential trajectory and topology outputs
-				ssh -o BatchMode=yes "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz {prefix}* md.xtc md.tpr *.tpr *.xtc 2>/dev/null || tar -czf md_results.tar.gz {prefix}* 2>/dev/null || true" >> "$LOG_FILE" 2>&1
-
-				rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
 				mkdir -p "$LOCAL_DIR/md_results"
-				tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/md_results"
 
-				rm -f "$LOCAL_DIR/md_results.tar.gz"
-				ssh -o BatchMode=yes "$SSH_TARGET" "rm -f '$REMOTE_DIR/md_results.tar.gz'" >> "$LOG_FILE" 2>&1
+				# Directly pull all simulation artifacts, excluding job scripts/archives
+				rsync -e "ssh -o BatchMode=yes" -avz \
+					--exclude="JOB" \
+					--exclude="JOB.tar.gz" \
+					"$SSH_TARGET:$REMOTE_DIR/" \
+					"$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
 			""")
 
 #			shell(f"""
@@ -1153,36 +1152,119 @@ rule finalize_md:
 
 
 # --- STEP 6: TRAJECTORY CLEANING & PBC WRAPPING CORRECTION ---
-# should automatically execute 
 rule pbc_correction_and_extract:
 	input:
-		md_checkpoint_guard = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
+		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
 		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_md.xtc",
 		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_md.tpr",
 	output:
 		tar = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/trjconv_pbc.log"
+	params:
+		log_abs = lambda wildcards: os.path.abspath(
+			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/trjconv_pbc.log"
+		),
+		tar_abs = lambda wildcards: os.path.abspath(
+			f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/frames/FRAMES_compressed.tar.gz"
+		)
 	shell: 
 		"""
-		# 1. Recenter molecular unity boundaries
-		echo "Protein" | gmx trjconv -f {input.xtc_md} -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/md_whole.xtc -pbc mol -ur compact > {log} 2>&1
+		LOG_ABS="{params.log_abs}"
+		TAR_ABS="{params.tar_abs}"
 		
-		# 2. Fit rotational and translational structural drift
-		echo "Protein Protein Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/md_clean.xtc -center -fit rot+trans >> {log} 2>&1
-		
-		# 3. Chop trajectory into individual PDB frames
-		mkdir -p results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/FRAMES
-		echo "Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/FRAMES/frame.pdb -s {input.tpr_md} -sep >> {log} 2>&1
-		
-		# Compress and archive individual coordinate files
-		mkdir -p $(dirname {output.tar})
-		tar -czf {output.tar} -C results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results FRAMES >> {log} 2>&1
-		
-		# Clean up massive intermediate trajectories to preserve space
-		# rm -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc
-		"""
+		mkdir -p $(dirname "$LOG_ABS")
+		mkdir -p $(dirname "$TAR_ABS")
 
+		# Change execution directory to md_results
+		cd $(dirname {input.xtc_md})
+
+		# 1. Recenter molecular unity boundaries
+		echo "Protein" | gmx trjconv \
+			-f $(basename {input.xtc_md}) \
+			-s $(basename {input.tpr_md}) \
+			-o md_whole.xtc \
+			-pbc mol -ur compact > "$LOG_ABS" 2>&1
+
+		# 2. Fit rotational/translational drift (printf with double backslash guarantees two distinct lines)
+		printf "Protein Protein Protein" | gmx trjconv \
+			-f md_whole.xtc \
+			-s $(basename {input.tpr_md}) \
+			-o md_clean.xtc \
+			-center -fit rot+trans >> "$LOG_ABS" 2>&1
+
+		# 3. Chop trajectory into individual PDB frames
+		mkdir -p FRAMES
+		echo "Protein" | gmx trjconv \
+			-f md_clean.xtc \
+			-s $(basename {input.tpr_md}) \
+			-o FRAMES/frame.pdb \
+			-sep >> "$LOG_ABS" 2>&1
+
+		# 4. Compress and archive coordinate frames into absolute output destination
+		tar -czf "$TAR_ABS" FRAMES >> "$LOG_ABS" 2>&1
+
+		# 5. Clean up temporary intermediate trajectory files and uncompressed frames
+		rm -f md_whole.xtc md_clean.xtc
+		rm -rf FRAMES
+		"""
+# should automatically execute 
+#rule pbc_correction_and_extract:
+#	input:
+#		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
+#		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_md.xtc",
+#		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_md.tpr",
+#	output:
+#		tar = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
+#	log:
+#		"logs/{pdb}/{source}/{model_id}/{protocol}/trjconv_pbc.log"
+#	params:
+#		log_abs = lambda wildcards: os.path.abspath(
+#			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/trjconv_pbc.log"
+#		)
+#	shell: 
+#		"""
+#		LOG_ABS="{params.log_abs}"
+#		cd $(dirname {input.xtc_md})
+#
+#		# 1. Recenter molecular unity boundaries
+#		echo "Protein" | gmx trjconv -f $(basename {input.xtc_md}) -s $(basename {input.tpr_md}) -o md_whole.xtc -pbc mol -ur compact > "$LOG_ABS" 2>&1
+#		
+#		# 2. Fit rotational and translational structural drift
+#		echo "Protein Protein Protein" | gmx trjconv -f md_whole.xtc -s $(basename {input.tpr_md}) -o md_clean.xtc -center -fit rot+trans >> "$LOG_ABS" 2>&1
+#		
+#		# 3. Chop trajectory into individual PDB frames
+#		mkdir -p frames
+#		echo "Protein" | gmx trjconv -f md_clean.xtc -o FRAMES/frame.pdb -s $(basename {input.tpr_md}) -sep >> "$LOG_ABS" 2>&1
+#		
+#		# Compress and archive individual coordinate files
+#		mkdir -p $(dirname {output.tar})
+#		#mkdir FRAMES
+#
+#		tar -czf {output.tar} -C . frames >> "$LOG_ABS" 2>&1
+#		
+#		# Clean up massive intermediate trajectories to preserve space
+#		# rm -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc
+		"""
+#		"""
+#		cd $(dirname {output.xtc_md})
+#		# 1. Recenter molecular unity boundaries
+#		echo "Protein" | gmx trjconv -f {input.xtc_md} -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/md_whole.xtc -pbc mol -ur compact > {log} 2>&1
+#		
+#		# 2. Fit rotational and translational structural drift
+#		echo "Protein Protein Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_whole.xtc -s {input.tpr_md} -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/md_clean.xtc -center -fit rot+trans >> {log} 2>&1
+#		
+#		# 3. Chop trajectory into individual PDB frames
+#		mkdir -p results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/FRAMES
+#		echo "Protein" | gmx trjconv -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_clean.xtc -o results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/FRAMES/frame.pdb -s {input.tpr_md} -sep >> {log} 2>&1
+#		
+#		# Compress and archive individual coordinate files
+#		mkdir -p $(dirname {output.tar})
+#		tar -czf {output.tar} -C results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results FRAMES >> {log} 2>&1
+#		
+#		# Clean up massive intermediate trajectories to preserve space
+#		# rm -f results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_whole.xtc results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_clean.xtc
+#		"""
 ###############################################################
 ### NOTE: CUSTOM SIMULATIONS BUILT ON TOP OF STANDARD 100ns SIM
 ### NOTE: CUSTOM SIMULATIONS BUILT ON TOP OF STANDARD 100ns SIM
