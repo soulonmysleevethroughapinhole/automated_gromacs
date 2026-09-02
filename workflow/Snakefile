@@ -16,6 +16,7 @@ include: "rules/prep.smk"
 
 # Include the MD sim rules
 include: "rules/sims.smk"
+include: "rules/gmx_energy_minimization.smk"
 
 # Helper to resolve protocol paths based on config overrides
 def resolve_targets(pdb, source, model):
@@ -27,7 +28,8 @@ def resolve_targets(pdb, source, model):
 		#return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/md_completed.txt"]
 		#return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"]
 		#return [f"results/movies/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"]
-		return [f"results/movies/{pdb}/{source}/{model}/standard_100ns_md_trajectory.mov"]
+		#return [f"results/movies/{pdb}/{source}/{model}/standard_100ns_md_trajectory.mov"]
+		return [f"results/gmx_em/{pdb}/{source}/{model}/standard_100ns/em_results/em_completed.txt"]
 
 	
 	job_paths = []
@@ -44,20 +46,24 @@ def resolve_targets(pdb, source, model):
 			#path = f"results/md/{pdb}/{source}/{model}/{protocol}_{length}ns/md_results/frames/FRAMES_compressed.tar.gz"
 			#path = f"results/md/{pdb}/{source}/{model}/{protocol}_{length}ns/md_results/frames/FRAMES_compressed.tar.gz"
 			path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
+			path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}/em_results/em_completed.txt"
 
 		elif protocol == "simulated_annealing":
 			#path = f"results/md/{pdb}/{source}/{model}/simulated_annealing/md_results/md_completed.txt"
 			#path = f"results/md/{pdb}/{source}/{model}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
 			#path = f"results/md/{pdb}/{source}/{model}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
 			path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
+			path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}/em_results/em_completed.txt"
 
-		elif protocol == "standard_100ns":  # "standard"
+		#elif protocol == "standard_100ns":  # "standard"
+		elif protocol == "standard":  # "standard"
 			#path = f"results/md/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
 			#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
 
 			#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/md_completed.txt"
 			#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"
 			path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
+			path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}_100ns/em_results/em_completed.txt"
 		
 		if path != None:
 			job_paths.append(path)

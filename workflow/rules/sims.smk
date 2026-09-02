@@ -13,6 +13,10 @@ import subprocess
 import time
 from pathlib import Path
 
+#from scripts.smk.sims.hpc_engine import HPCJobManager
+sys.path.insert(0, os.path.abspath("scripts/smk/sims"))
+from hpc_engine import HPCJobManager
+
 wildcard_constraints:
 	pdb = "[^/]+",
 	source = "[^/]+",
@@ -779,6 +783,81 @@ rule run_HPC_md:
 		logger.handlers.clear()
 
 		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+		fh = logging.FileHandler(log_path, mode="a"); fh.setFormatter(fmt); logger.addHandler(fh)
+		ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
+
+		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}"
+		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+		job_dir = os.path.dirname(input.job_description)
+		local_dir = os.path.abspath(os.path.dirname(output.done))
+		step_log_file = os.path.join(job_dir, "simulation_steps.log")
+
+		clean_base = HPC_REMOTE_BASE.lstrip("~/")
+		remote_dir = os.path.join(clean_base, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
+		job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
+
+		# Initialize HPC Engine
+		hpc = HPCJobManager(
+			ssh_target="komondor",
+			remote_dir=remote_dir,
+			local_dir=local_dir,
+			job_name=job_name,
+			job_script=os.path.basename(input.job_description),
+			log_path=log_path,
+			logger=logger,
+			step_log_file=step_log_file,
+			hpc_user=HPC_USER,
+		)
+
+		try:
+			# Progress function closure for MD heartbeat
+			def md_progress(ssh_target, r_dir):
+				return get_remote_gromacs_progress(ssh_target, r_dir, prefix)
+
+			# Execute full HPC pipeline
+			hpc.execute_pipeline(
+				completion_check_file=f"{prefix}.gro",
+				target_subdir="md_results_HPC",
+				poll_interval_sec=900,
+				get_progress_fn=md_progress,
+				unpack_job_archive=True
+			)
+
+			# Write local Snakemake sentinel
+			with open(output.done, "w") as f:
+				f.write(f"HPC MD simulation completed for {target_id}.\n")
+
+
+			log_sim_step("DONE", step_log_file, "HPC MD rule finished successfully.")
+
+		except Exception as err:
+			log_sim_step("ERROR", step_log_file, str(err))
+			logger.exception("Execution failed for %s: %s", target_id, str(err))
+			raise
+
+rule finalize_md:
+	input:
+		det_compute_scheduling = det_compute_scheduling
+	output:
+		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/md_completed.txt",
+		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.xtc",
+		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.tpr",
+	log:
+		"logs/{pdb}/{source}/{model_id}/finalize_md.log"
+	params:
+		log_abs = lambda wildcards: os.path.abspath(
+			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/finalize_md.log"
+		)
+	run:
+		# Setup Logger
+		log_path = params.log_abs
+		os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+		logger = logging.getLogger(f"finalize_md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}")
+		logger.setLevel(logging.INFO)
+		logger.handlers.clear()
+
+		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 		fh = logging.FileHandler(log_path, mode="a")
 		fh.setFormatter(fmt)
 		logger.addHandler(fh)
@@ -789,281 +868,135 @@ rule run_HPC_md:
 
 		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}"
 		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
-		job_dir = os.path.dirname(input.job_description)
-		local_dir = os.path.abspath(os.path.dirname(output.done))
-		step_log_file = os.path.join(job_dir, "simulation_steps.log")
-
-		logger.info("Starting MD execution phase for target: %s", target_id)
-
-		if not os.path.exists(step_log_file):
-			log_sim_step("INIT", step_log_file, f"Target: {target_id}")
-		else:
-			log_sim_step("RESUME_WORKFLOW", step_log_file, f"Workflow checked target: {target_id}")
-
-		try:
-			with open(input.job_description, "r") as f:
-				job_description = f.read().strip()
-
-			ssh_target = "komondor"
-			clean_base = HPC_REMOTE_BASE.lstrip("~/")
-			remote_dir = os.path.join(
-				clean_base,
-				f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns",
-			)
-			job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
-			job_script = os.path.basename(input.job_description)
-
-			log_sim_step("EXEC_MODE", step_log_file, f"HPC execution target ({ssh_target})")
-
-			# Guarantee remote directory exists before testing files
-			subprocess.run(["ssh", "-o", "BatchMode=yes", ssh_target, f"mkdir -p '{remote_dir}'"], check=False)
-
-			# 1. Check remote completion upfront
-			check_cmd = [
-				"ssh",
-				"-o", "BatchMode=yes",
-				ssh_target,
-				f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES || echo NO",
-			]
-			check_res = subprocess.run(check_cmd, capture_output=True, text=True, check=False)
-
-			if check_res.returncode == 0 and "YES" in check_res.stdout:
-				remote_done = "YES"
-			else:
-				remote_done = "NO"
-
-			if remote_done == "YES":
-				logger.info("🎉 Remote simulation already finished! (Found %s.gro on HPC)", prefix)
-				log_sim_step("CHECK_REMOTE", step_log_file, f"Simulation finished ({prefix}.gro present)")
-			else:
-				# 2. Check if job is active in queue (Returns Job ID if running or pending)
-				squeue_cmd = [
-					"ssh",
-					"-o", "BatchMode=yes",
-					ssh_target,
-					f"squeue -u {HPC_USER} -n {job_name} -h -o '%i %t'",
-				]
-				q_res = subprocess.run(squeue_cmd, capture_output=True, text=True, check=False)
-				q_out = q_res.stdout.strip()
-
-				job_id = None
-				if q_out:
-					# Job is ALREADY active! Extract Job ID and attach monitor loop to it.
-					job_id = q_out.split()[0]
-					logger.info("⏳ Slurm Job '%s' already active in queue (Job ID: %s). Attaching monitor loop...", job_name, job_id)
-					log_sim_step("SLURM_ACTIVE", step_log_file, f"Job ID {job_id} running/queued on HPC")
-				else:
-					# Job is not in queue; submit a new Slurm batch job
-					logger.info("🚀 Submitting new Slurm job to Komondor %s @(%s)...", job_name, ssh_target)
-					submit_cmd = [
-						"ssh",
-						"-o", "BatchMode=yes",
-						ssh_target,
-						f"cd '{remote_dir}' && [ -f JOB.tar.gz ] && tar -xzf JOB.tar.gz; sbatch {job_script}",
-					]
-					sub_res = subprocess.run(submit_cmd, capture_output=True, text=True, check=False)
-
-					if sub_res.returncode == 0 and "Submitted batch job" in sub_res.stdout:
-						job_id = sub_res.stdout.strip().split()[-1]
-						logger.info("✅ Slurm job successfully submitted! Assigned Job ID: %s", job_id)
-						log_sim_step("SLURM_SUBMIT", step_log_file, f"Submitted batch job ID: {job_id}")
-					else:
-						logger.error("❌ Failed to submit Slurm job: %s", sub_res.stderr)
-						log_sim_step("SLURM_FAILED", step_log_file, f"Submission failed: {sub_res.stderr.strip()}")
-						raise RuntimeError(f"Slurm sbatch submission failed: {sub_res.stderr}")
-
-				# 3. Monitor Slurm Execution Loop (EVALUATED FOR BOTH ACTIVE & NEW JOBS)
-				if job_id:
-					logger.info("Monitoring Slurm Job %s...", job_id)
-					last_progress_msg = ""
-
-					while True:
-						if job_id and str(job_id).isdigit():
-							check_q = [
-								"ssh",
-								"-o", "BatchMode=yes",
-								ssh_target,
-								f"squeue -j {job_id} -h -o '%t'",
-							]
-							q_check = subprocess.run(check_q, capture_output=True, text=True, check=False)
-							stdout_clean = q_check.stdout.strip()
-							job_state = stdout_clean.split()[0] if stdout_clean else ""
-
-							if not job_state:
-								logger.info("Job %s left the queue. Verifying completion...", job_id)
-								break  # Job completed or left queue; exit polling loop
-
-							if job_state == "R":
-								progress = get_remote_gromacs_progress(ssh_target, remote_dir, prefix)
-								if progress and progress != last_progress_msg:
-									log_sim_step("HEARTBEAT", step_log_file, f"Job {job_id} running - {progress}")
-									last_progress_msg = progress
-								else:
-									log_sim_step("HEARTBEAT", step_log_file, f"Job {job_id} actively executing on HPC")
-							else:
-								log_sim_step("HEARTBEAT", step_log_file, f"Job {job_id} queued (State: {job_state})")
-
-						time.sleep(900)  # Poll every 15 minutes
-
-					# 4. Final Verification: Confirm simulation produced output
-					post_check = [
-						"ssh",
-						"-o", "BatchMode=yes",
-						ssh_target,
-						f"[ -f '{remote_dir}/{prefix}.gro' ] && echo YES || echo NO",
-					]
-					post_res = subprocess.run(post_check, capture_output=True, text=True, check=False)
-					final_done = post_res.stdout.strip() if post_res.returncode == 0 else "NO"
-
-					if final_done == "YES":
-						log_sim_step("SLURM_FINISHED", step_log_file, f"Slurm Job {job_id} completed successfully")
-					else:
-						log_sim_step("SLURM_FAILED", step_log_file, f"Slurm Job {job_id} ended without producing {prefix}.gro")
-						raise RuntimeError(f"HPC Job {job_id} terminated unexpectedly ({prefix}.gro missing).")
-
-			# Sync and retrieve results locally
-			logger.info("📦 Archiving and retrieving simulation artifacts from HPC...")
-			log_sim_step("RETRIEVE_START", step_log_file, "Fetching remote output files via rsync")
-
-			shell(f"""
-				SSH_TARGET="{ssh_target}"
-				REMOTE_DIR="{remote_dir}"
-				LOCAL_DIR="{local_dir}"
-				LOG_FILE="{log_path}"
-
-				mkdir -p "$LOCAL_DIR/md_results"
-
-				# Directly pull all simulation artifacts, excluding job scripts/archives
-				rsync -e "ssh -o BatchMode=yes" -avz \
-					--exclude="JOB" \
-					--exclude="JOB.tar.gz" \
-					"$SSH_TARGET:$REMOTE_DIR/" \
-					"$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
-			""")
-
-#			shell(f"""
-#				SSH_TARGET="{ssh_target}"
-#				REMOTE_DIR="{remote_dir}"
-#				PREFIX="{prefix}"
-#				LOCAL_DIR="{local_dir}"
-#				LOG_FILE="{log_path}"
-#
-#				# 1. Create remote archive using Python's {prefix} variable directly
-#				ssh -o BatchMode=yes "$SSH_TARGET" "cd '$REMOTE_DIR' && tar -czf md_results.tar.gz {prefix}* *.tpr *.xtc 2>/dev/null || tar -czf md_results.tar.gz {prefix}* 2>/dev/null || true" >> "$LOG_FILE" 2>&1
-#
-#				# 2. Fetch archive locally
-#				rsync -avz "$SSH_TARGET:$REMOTE_DIR/md_results.tar.gz" "$LOCAL_DIR/" >> "$LOG_FILE" 2>&1
-#
-#				# 3. Extract locally
-#				mkdir -p "$LOCAL_DIR/md_results"
-#				tar -xzf "$LOCAL_DIR/md_results.tar.gz" -C "$LOCAL_DIR/md_results"
-#
-#				# 4. Clean up temporary archives
-#				rm -f "$LOCAL_DIR/md_results.tar.gz"
-#				ssh -o BatchMode=yes "$SSH_TARGET" "rm -f '$REMOTE_DIR/md_results.tar.gz'" >> "$LOG_FILE" 2>&1
-#			""")
-
-			logger.info(f"MD DATA ACQUIRED CHECK @ {local_dir}/md_results")
-			log_sim_step("RETRIEVE_COMPLETE", step_log_file, "Downloaded, extracted, and cleaned up md_results.tar.gz")
-
-			# Sentinel output
-			with open(output.done, "w") as f:
-				f.write(f"MD simulation completed for {target_id}.\n")
-
-			log_sim_step("DONE", step_log_file, "Pipeline rule finished successfully.")
-
-		except Exception as err:
-			log_sim_step("ERROR", step_log_file, str(err))
-			logger.exception("Execution failed in run_molecular_dynamics for %s: %s", target_id, str(err))
-			raise
-
-rule finalize_md:
-	input:
-		det_compute_scheduling = det_compute_scheduling
-	output:
-		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/md_completed.txt",
-		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.xtc",
-		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.tpr",
-	run:
 		compute_target = get_compute_target(wildcards)
+
 		out_dir = os.path.abspath(os.path.dirname(output.done))
 		os.makedirs(out_dir, exist_ok=True)
 
 		job_dir = os.path.abspath(f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/JOB")
-		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+		hpc_staging_dir = os.path.abspath(f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_results_HPC")
 
-		# ------------------------------------------------------------------
-		# COMMON FALLBACK: Ensure .tpr exists in md_results
-		# (.tpr is created locally during grompp in JOB/, copy if remote tar missed it)
-		# ------------------------------------------------------------------
-		local_tpr_src = os.path.join(job_dir, f"{prefix}.tpr")
-		if not os.path.exists(output.tpr_md) and os.path.exists(local_tpr_src):
-			shutil.copy2(local_tpr_src, output.tpr_md)
+		logger.info("Starting finalize_md phase for %s [Compute Target: %s]", target_id, compute_target)
 
-		# ------------------------------------------------------------------
-		# FALLBACK 2: Check for generic 'md.xtc' or misplaced files
-		# ------------------------------------------------------------------
-		if not os.path.exists(output.xtc_md):
-			# Check if extracted as md.xtc inside md_results/
-			generic_xtc = os.path.join(out_dir, "md.xtc")
-			if os.path.exists(generic_xtc):
-				os.rename(generic_xtc, output.xtc_md)
+		try:
+			# ------------------------------------------------------------------
+			# HPC PATH: Move artifacts from md_results_HPC -> md_results
+			# ------------------------------------------------------------------
+			if compute_target == "HPC":
+				if os.path.exists(hpc_staging_dir):
+					logger.info("Staging directory found at %s. Moving artifacts to %s...", hpc_staging_dir, out_dir)
+					moved_count = 0
 
-			# Check if extracted into parent standard_100ns directory
-			parent_dir = os.path.abspath(os.path.join(out_dir, ".."))
-			parent_xtc = os.path.join(parent_dir, f"{prefix}.xtc")
-			if os.path.exists(parent_xtc):
-				shutil.move(parent_xtc, output.xtc_md)
-		# ------------------------------------------------------------------
-		# HPC PATH
-		# ------------------------------------------------------------------
-		if compute_target == "HPC":
-			# Check that required outputs exist before writing sentinel
-			if not os.path.exists(output.xtc_md):
-				raise FileNotFoundError(f"HPC execution finished, but {output.xtc_md} was not retrieved into md_results!")
-			if not os.path.exists(output.tpr_md):
-				raise FileNotFoundError(f"HPC execution finished, but {output.tpr_md} is missing from md_results!")
-
-			with open(output.done, "w") as f:
-				f.write(f"MD simulation (HPC) finalized for {wildcards.pdb}/{wildcards.source}/{wildcards.model_id}\n")
-			return
-
-		# ------------------------------------------------------------------
-		# LOCAL PATH
-		# ------------------------------------------------------------------
-		if compute_target == "local":
-			job_desc = os.path.join(job_dir, f"{prefix}_job.job")
-
-			if not os.path.exists(job_desc):
-				raise FileNotFoundError(f"Expected job description not found: {job_desc}")
-
-			with open(job_desc, "r") as fh:
-				content = fh.read().strip()
-
-			if content != "BLANK":
-				raise ValueError(f"Job description must be 'BLANK' for local finalize, got: '{content}'")
-
-			# Collect all matching MD outputs from JOB into md_results
-			if os.path.isdir(job_dir):
-				for fn in os.listdir(job_dir):
-					if fn.startswith(prefix):
-						src = os.path.join(job_dir, fn)
+					for fn in os.listdir(hpc_staging_dir):
+						src = os.path.join(hpc_staging_dir, fn)
 						dst = os.path.join(out_dir, fn)
-						try:
-							shutil.copy2(src, dst)
-						except Exception:
-							pass
+						
+						if os.path.isfile(src):
+							shutil.move(src, dst)
+							logger.info("Moved file: %s -> %s", fn, dst)
+							moved_count += 1
+						elif os.path.isdir(src):
+							logger.info("Scanning nested directory inside staging: %s", fn)
+							for nested_fn in os.listdir(src):
+								nested_src = os.path.join(src, nested_fn)
+								nested_dst = os.path.join(out_dir, nested_fn)
+								shutil.move(nested_src, nested_dst)
+								logger.info("Moved nested file: %s -> %s", nested_fn, nested_dst)
+								moved_count += 1
+					
+					logger.info("Successfully relocated %d items from HPC staging.", moved_count)
+					shutil.rmtree(hpc_staging_dir, ignore_errors=True)
+					logger.info("Cleaned up staging folder: %s", hpc_staging_dir)
+				else:
+					logger.warning("HPC staging directory %s does not exist. Checking destination directly...", hpc_staging_dir)
 
-			# Validate that output files are present
-			if not os.path.exists(output.xtc_md) or not os.path.exists(output.tpr_md):
-				raise FileNotFoundError(f"Local MD completed, but missing expected outputs (.xtc / .tpr) in {out_dir}")
+				# Fallback check for generic 'md.xtc' naming
+				generic_xtc = os.path.join(out_dir, "md.xtc")
+				if not os.path.exists(output.xtc_md) and os.path.exists(generic_xtc):
+					os.rename(generic_xtc, output.xtc_md)
+					logger.info("Renamed generic 'md.xtc' to expected '%s'", output.xtc_md)
 
-			with open(output.done, "w") as f:
-				f.write(f"MD simulation (local) finalized and artifacts collected for {wildcards.pdb}/{wildcards.source}/{wildcards.model_id}\n")
-			return
+				# Fallback copy for .tpr from local JOB folder if missing
+				local_tpr_src = os.path.join(job_dir, f"{prefix}.tpr")
+				if not os.path.exists(output.tpr_md) and os.path.exists(local_tpr_src):
+					shutil.copy2(local_tpr_src, output.tpr_md)
+					logger.info("Copied fallback TPR structure from %s to %s", local_tpr_src, output.tpr_md)
 
-		raise ValueError(f"Unknown compute target when finalizing MD: {compute_target}")
-		
+				# Validation checks
+				if not os.path.exists(output.xtc_md):
+					err_msg = f"HPC execution finished, but {output.xtc_md} was not found in {out_dir}!"
+					logger.error(err_msg)
+					raise FileNotFoundError(err_msg)
+
+				if not os.path.exists(output.tpr_md):
+					err_msg = f"HPC execution finished, but {output.tpr_md} is missing from {out_dir}!"
+					logger.error(err_msg)
+					raise FileNotFoundError(err_msg)
+
+				with open(output.done, "w") as f:
+					f.write(f"MD simulation (HPC) finalized for {target_id}\n")
+
+				logger.info("✅ HPC MD finalization successfully completed for %s", target_id)
+				return
+
+			# ------------------------------------------------------------------
+			# LOCAL PATH
+			# ------------------------------------------------------------------
+			if compute_target == "local":
+				job_desc = os.path.join(job_dir, f"{prefix}_job.job")
+
+				if not os.path.exists(job_desc):
+					err_msg = f"Expected job description not found: {job_desc}"
+					logger.error(err_msg)
+					raise FileNotFoundError(err_msg)
+
+				with open(job_desc, "r") as fh:
+					content = fh.read().strip()
+
+				if content != "BLANK":
+					err_msg = f"Job description must be 'BLANK' for local finalize, got: '{content}'"
+					logger.error(err_msg)
+					raise ValueError(err_msg)
+
+				# Copy matching MD outputs from JOB into md_results
+				if os.path.isdir(job_dir):
+					logger.info("Collecting local MD outputs from %s into %s...", job_dir, out_dir)
+					copied_count = 0
+					for fn in os.listdir(job_dir):
+						if fn.startswith(prefix):
+							src = os.path.join(job_dir, fn)
+							dst = os.path.join(out_dir, fn)
+							try:
+								shutil.copy2(src, dst)
+								copied_count += 1
+							except Exception as c_err:
+								logger.warning("Failed to copy %s to %s: %s", src, dst, str(c_err))
+					logger.info("Copied %d local simulation artifacts.", copied_count)
+
+				# Fallback check for generic md.xtc
+				generic_xtc = os.path.join(out_dir, "md.xtc")
+				if not os.path.exists(output.xtc_md) and os.path.exists(generic_xtc):
+					os.rename(generic_xtc, output.xtc_md)
+					logger.info("Renamed generic 'md.xtc' to '%s'", output.xtc_md)
+
+				# Validate outputs
+				if not os.path.exists(output.xtc_md) or not os.path.exists(output.tpr_md):
+					err_msg = f"Local MD completed, but missing expected outputs (.xtc / .tpr) in {out_dir}"
+					logger.error(err_msg)
+					raise FileNotFoundError(err_msg)
+
+				with open(output.done, "w") as f:
+					f.write(f"MD simulation (local) finalized and artifacts collected for {target_id}\n")
+
+				logger.info("✅ Local MD finalization successfully completed for %s", target_id)
+				return
+
+			raise ValueError(f"Unknown compute target when finalizing MD: {compute_target}")
+
+		except Exception as err:
+			logger.exception("Finalization failed for target %s: %s", target_id, str(err))
+			raise	
+				
 #rule finalize_md:
 #	input:
 ##		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/local_md_completed.txt"
