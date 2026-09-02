@@ -1208,6 +1208,19 @@ rule pbc_correction_and_extract:
 		rm -f md_whole.xtc md_clean.xtc
 		rm -rf FRAMES
 		"""
+
+# --- STEP 7: AUTOMATED PYMOL MOVIE GENERATION ---
+rule generate_pymol_movie:
+	input:
+		tar = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
+	output:
+		movie = "results/movies/{pdb}/{source}/{model_id}/{protocol}_md_trajectory.mov"
+	log:
+		"logs/{pdb}/{source}/{model_id}/{protocol}/pymol_render.log"
+	shell:
+		"python scripts/render_pymol_movie.py {input.tar} {output.movie} > {log} 2>&1"
+
+
 # should automatically execute 
 #rule pbc_correction_and_extract:
 #	input:
@@ -1755,16 +1768,6 @@ rule finalize_custom_md:
 #		"""
 #
 #
-## --- STEP 7: AUTOMATED PYMOL MOVIE GENERATION ---
-#rule generate_pymol_movie:
-#	input:
-#		tar = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/FRAMES_compressed.tar.gz"
-#	output:
-#		movie = "results/gromacs/{pdb}/{source}/{model_id}/movies/100ns_md_trajectory.mov"
-#	log:
-#		"logs/{pdb}/{source}/{model_id}/pymol_render.log"
-#	shell:
-#		"python scripts/render_pymol_movie.py {input.tar} {output.movie} > {log} 2>&1"
 		
 # Rule 4: Run Quantum Mechanical / Excited-State Calculations on Snapshots
 # rule run_quantum_mechanics:
