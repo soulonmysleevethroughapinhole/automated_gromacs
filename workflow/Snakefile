@@ -17,6 +17,7 @@ include: "rules/prep.smk"
 # Include the MD sim rules
 include: "rules/sims.smk"
 include: "rules/gmx_energy_minimization.smk"
+include: "rules/mopac.smk"
 
 # Helper to resolve protocol paths based on config overrides
 def resolve_targets(pdb, source, model):
@@ -64,6 +65,7 @@ def resolve_targets(pdb, source, model):
 			#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"
 			path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
 			path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}_100ns/em_results/em_completed.txt"
+			path = f'results/mopac/{pdb}/{source}/{model}/{protocol}_100ns/frames/heat_of_formation.csv'
 		
 		if path != None:
 			job_paths.append(path)

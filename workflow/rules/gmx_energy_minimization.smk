@@ -13,7 +13,7 @@ rule run_HPC_gmx_em:
 	input:
 		job_description = "results/gmx_em/{pdb}/{source}/{model_id}/{protocol}/JOB/{pdb}_{source}_{model_id}_em_job.job"
 	output:
-		tar = "results/gmx_em/{pdb}/{source}/{model_id}/{protocol}/em_results/frames/FRAMES_compressed.tar.gz",
+		tar = "results/gmx_em/{pdb}/{source}/{model_id}/{protocol}/em_results/frames/EM_FRAMES_compressed.tar.gz",
 		em_completed = "results/gmx_em/{pdb}/{source}/{model_id}/{protocol}/em_results/em_completed.txt"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/energy_minimization/run_HPC_gmx_em.log"

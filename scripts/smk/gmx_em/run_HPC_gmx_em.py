@@ -112,10 +112,10 @@ def main():
     hpc.pull_results(target_subdir="frames")
 
     # Move pulled archive into expected path
-    local_pulled_tar = os.path.join(local_dir, "frames", "EM_FRAMES_compressed.tar.gz")
-    expected_output_tar = os.path.join(local_dir, "frames", "FRAMES_compressed.tar.gz")
-    if os.path.exists(local_pulled_tar):
-        os.rename(local_pulled_tar, expected_output_tar)
+    #local_pulled_tar = os.path.join(local_dir, "frames", "EM_FRAMES_compressed.tar.gz")
+    #expected_output_tar = os.path.join(local_dir, "frames", "FRAMES_compressed.tar.gz")
+    #if os.path.exists(local_pulled_tar):
+    #    os.rename(local_pulled_tar, expected_output_tar)
 
     # 7. Write completion sentinel
     with open(em_completed_sentinel, "w") as f:
