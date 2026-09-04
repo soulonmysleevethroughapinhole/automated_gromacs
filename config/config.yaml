@@ -63,26 +63,26 @@ manual_prediction_dirs:
 custom_simulations:
   7UU9:
     empirical_canonical_structure:
-      - protocol: 'standard'
+      - protocol: 'standard_100ns'
         compute_target: "HPC"
   7KQW:
     empirical_canonical_structure:
-      - protocol: 'standard'
+      - protocol: 'standard_100ns'
         compute_target: 'HPC'
     colabfold_model_1:
-      - protocol: 'standard'
+      - protocol: 'standard_100ns'
         compute_target: 'HPC'
     colabfold_model_2:
-      - protocol: 'standard'
+      - protocol: 'standard_100ns'
         compute_target: 'HPC'
     colabfold_model_3:
-      - protocol: 'standard'
+      - protocol: 'standard_100ns'
         compute_target: 'HPC'
     colabfold_model_4:
-      - protocol: 'standard'
+      - protocol: 'standard_100ns'
         compute_target: 'HPC'
     colabfold_model_5:
-      - protocol: 'standard'
+      - protocol: 'standard_100ns'
         compute_target: 'HPC'
 
 

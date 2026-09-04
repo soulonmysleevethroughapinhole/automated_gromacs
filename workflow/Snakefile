@@ -13,11 +13,11 @@ configfile: "config/config.yaml"
 
 # Include the preparation pipeline rules
 include: "rules/prep.smk"
-
-# Include the MD sim rules
 include: "rules/sims.smk"
 include: "rules/gmx_energy_minimization.smk"
 include: "rules/mopac.smk"
+include: "rules/pymol.smk"
+include: "rules/analysis.smk"
 
 # Helper to resolve protocol paths based on config overrides
 def resolve_targets(pdb, source, model):
@@ -30,8 +30,9 @@ def resolve_targets(pdb, source, model):
 		#return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"]
 		#return [f"results/movies/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"]
 		#return [f"results/movies/{pdb}/{source}/{model}/standard_100ns_md_trajectory.mov"]
-		return [f"results/gmx_em/{pdb}/{source}/{model}/standard_100ns/em_results/em_completed.txt"]
-
+		#return [f"results/gmx_em/{pdb}/{source}/{model}/standard_100ns/em_results/em_completed.txt"]
+		#return [f'results/mopac/{pdb}/{source}/{model}/standard_100ns/frames/heat_of_formation.csv']
+		return [f'results/analysis/plots/{pdb}/{source}/{model}/standard_100ns/analysis_complete.txt']
 	
 	job_paths = []
 	for job in custom_jobs:
@@ -48,6 +49,7 @@ def resolve_targets(pdb, source, model):
 			#path = f"results/md/{pdb}/{source}/{model}/{protocol}_{length}ns/md_results/frames/FRAMES_compressed.tar.gz"
 			path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
 			path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}/em_results/em_completed.txt"
+			path = f'results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt'
 
 		elif protocol == "simulated_annealing":
 			#path = f"results/md/{pdb}/{source}/{model}/simulated_annealing/md_results/md_completed.txt"
@@ -55,9 +57,10 @@ def resolve_targets(pdb, source, model):
 			#path = f"results/md/{pdb}/{source}/{model}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
 			path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
 			path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}/em_results/em_completed.txt"
+			path = f'results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt'
 
-		#elif protocol == "standard_100ns":  # "standard"
-		elif protocol == "standard":  # "standard"
+		elif protocol == "standard_100ns":  # "standard"
+		#elif protocol == "standard":  # "standard"
 			#path = f"results/md/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
 			#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
 
@@ -66,10 +69,12 @@ def resolve_targets(pdb, source, model):
 			path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
 			path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}_100ns/em_results/em_completed.txt"
 			path = f'results/mopac/{pdb}/{source}/{model}/{protocol}_100ns/frames/heat_of_formation.csv'
+			path = f'results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt'
 		
 		if path != None:
 			job_paths.append(path)
 		
+	
 	return job_paths
 	
 # DYNAMIC ROUTING FUNCTION
@@ -111,6 +116,7 @@ def get_final_targets(wildcards):
 		# 4. Check overrides for <pdb>
 		#overrides = config.get("custom_simulations", {}).get(pdb, [])
 
+	print(targets)
 		
 	return targets
 

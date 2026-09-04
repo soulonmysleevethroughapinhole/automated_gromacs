@@ -382,7 +382,7 @@ rule schedule_md_job:
 						.get(wildcards.pdb, {})\
 						.get(f'{wildcards.source}_{wildcards.model_id}', [])
 
-		current_protocol = "standard"
+		current_protocol = "standard_100ns"
 		pdb_config = next((entry for entry in pdb_config_entries if entry.get("protocol") == current_protocol), {})
 
 		compute_target = pdb_config.get("compute_target", def_compute_target)
@@ -573,7 +573,7 @@ def get_compute_target(wildcards):
 					.get(wildcards.pdb, {})\
 					.get(f'{wildcards.source}_{wildcards.model_id}', [])
 
-	current_protocol = "standard"
+	current_protocol = "standard_100ns"
 	pdb_config = next((entry for entry in pdb_config_entries if entry.get("protocol") == current_protocol), {})
 
 	compute_target = pdb_config.get("compute_target", def_compute_target)
