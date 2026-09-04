@@ -115,8 +115,6 @@ def get_final_targets(wildcards):
 						#targets.append(f"results/{pdb}_{source}_{model_spec}/movies/100ns_md_trajectory.mov")
 		# 4. Check overrides for <pdb>
 		#overrides = config.get("custom_simulations", {}).get(pdb, [])
-
-	print(targets)
 		
 	return targets
 
