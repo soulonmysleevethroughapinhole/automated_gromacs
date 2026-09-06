@@ -2,6 +2,133 @@ import os
 import time
 import logging
 import subprocess
+import yaml
+
+def get_simulation_progress(ssh_target: str, remote_dir: str) -> str | None:
+    """Helper to parse the latest frame/time progress from remote md.log."""
+    cmd = (
+        f"ssh -o BatchMode=yes {ssh_target} "
+        f"\"[ -f '{remote_dir}/*.log' ] && tail -n 20 '{remote_dir}'/*.log | grep 'Step' | tail -n 1 || echo ''\""
+    )
+    try:
+        res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+        return res.stdout.strip() if res.stdout else None
+    except Exception:
+        return None
+
+def execute_hpc_md(
+    wildcards,
+    job_description_path: str,
+    output_done_path: str,
+    log_path: str,
+    hpc_user: str = None,
+    hpc_host: str = "komondor",
+    hpc_remote_base: str = None
+):
+    """
+    Orchestrates HPC execution and monitoring for custom simulation protocols.
+    """
+    pdb = wildcards.pdb
+    source = wildcards.source
+    model_id = wildcards.model_id
+    protocol = wildcards.protocol
+
+    # 1. Setup Isolated Logger
+    log_abs = os.path.abspath(log_path)
+    os.makedirs(os.path.dirname(log_abs), exist_ok=True)
+
+    logger_name = f"run_custom_md_HPC_{pdb}_{source}_{model_id}_{protocol}"
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+
+    fh = logging.FileHandler(log_abs, mode="a")
+    fh.setFormatter(fmt)
+    logger.addHandler(fh)
+
+    ch = logging.StreamHandler()
+    ch.setFormatter(fmt)
+    logger.addHandler(ch)
+
+    target_id = f"{pdb}/{source}/{model_id}/{protocol}"
+    prefix = f"{pdb}_{source}_{model_id}_md"
+    job_script_filename = f"{prefix}_job.job"
+
+    job_dir = os.path.abspath(os.path.dirname(job_description_path))
+    local_protocol_dir = os.path.abspath(os.path.dirname(output_done_path))
+    step_log_file = os.path.join(job_dir, "simulation_steps.log")
+
+    logger.info("Initializing HPC custom MD execution phase for target: %s", target_id)
+
+    # 2. Check execution mode in job description
+    if not os.path.exists(job_description_path):
+        raise FileNotFoundError(f"Job description file not found: {job_description_path}")
+
+    with open(job_description_path, "r") as f:
+        job_description_content = f.read().strip()
+
+    if job_description_content == "BLANK":
+        logger.info("Target %s is configured for LOCAL mode. Skipping HPC rule.", target_id)
+        return
+
+    # 3. Construct Remote Directory
+    remote_base = hpc_remote_base or os.environ.get("HPC_REMOTE_BASE", "/home/johnnys/projects/automated_gromacs")
+    remote_dir = os.path.join(remote_base, pdb, source, model_id, protocol)
+    ssh_target = hpc_host or "komondor"
+
+    # 4. Instantiate HPCJobManager
+    manager = HPCJobManager(
+        ssh_target=ssh_target,
+        remote_dir=remote_dir,
+        local_dir=local_protocol_dir,
+        job_name=f"md_{pdb}_{source}_{model_id}_{protocol}",
+        job_script=job_script_filename,
+        log_path=log_abs,
+        logger=logger,
+        step_log_file=step_log_file,
+        hpc_user=hpc_user or os.environ.get("HPC_USER", "johnnys")
+    )
+
+    try:
+        # 5. Execute Remote Slurm Pipeline
+        # Expects {prefix}.gro upon completion
+        manager.execute_pipeline(
+            completion_check_file=f"{prefix}.gro",
+            target_subdir=".",  # Pull directly into protocol folder
+            poll_interval_sec=300, # Poll Slurm status every 5 minutes
+            get_progress_fn=get_simulation_progress,
+            unpack_job_archive=True
+        )
+
+        # 6. Write Local Sentinel File
+        with open(output_done_path, "w") as f:
+            f.write(f"HPC Custom MD completed for {target_id} at {remote_dir}.\n")
+
+        # 7. Mirror the canonical MD artifacts into the protocol md_results directory so downstream rules
+        # (trajectory cleanup, analysis, movies) work without a second staging hop.
+        results_dir = os.path.join(local_protocol_dir, "md_results")
+        os.makedirs(results_dir, exist_ok=True)
+        for suffix in [".xtc", ".tpr", ".gro", ".cpt", ".edr", ".log"]:
+            src = os.path.join(local_protocol_dir, f"{prefix}{suffix}")
+            if os.path.exists(src):
+                shutil.copy2(src, os.path.join(results_dir, os.path.basename(src)))
+        with open(os.path.join(results_dir, "md_completed.txt"), "w") as f:
+            f.write(f"Custom MD protocol '{protocol}' completed for {target_id}.\n")
+
+        # 8. Also mirror the canonical output contract expected by downstream rules
+        # in the same protocol directory used by the DAG.
+        canonical_done = os.path.join(local_protocol_dir, "md_results", "md_completed.txt")
+        if os.path.exists(canonical_done):
+            with open(canonical_done, "w") as f:
+                f.write(f"Custom MD protocol '{protocol}' completed for {target_id}.\n")
+
+        logger.info("🎉 HPC Custom MD finished successfully for %s", target_id)
+
+    except Exception as err:
+        logger.exception("Execution failed in execute_hpc_md for %s: %s", target_id, str(err))
+        raise
 
 class HPCJobManager:
     """

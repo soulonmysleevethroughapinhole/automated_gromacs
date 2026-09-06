@@ -1,5 +1,3 @@
-# Protein list
-#targets: ["7JPY", "7KPH", "8A55"]
 
 #targets:
 #  7UU9:
@@ -7,15 +5,15 @@
 #  7KPH:
 #    length_ns: 500
 
-#default_compute_target: komondor # local, hpc
-default_compute_target: local # local, hpc
+default_compute_target: HPC # local, hpc
+#default_compute_target: local # local, hpc
 
 protocols:
   standard_100ns:
     mdp_file: "config/gromacs_settings/interruptable_config_ultimate/md.mdp"
     length_ns: 100
     default_compute: "local"
-  simulated_annealing:
+  simulated_annealing: #eh whatever maybe these arent needed anyway
     mdp_file: "config/gromacs_settings/simulated_annealation/anneal.mdp"
     length_ns: 1000
     default_compute: "HPC"  # Shorter runs can be kept local!
@@ -27,21 +25,20 @@ protocols:
 #####################################
 ###### PDBs to prep and screen ######
 #####################################
-
+# Protein list
 # Target structures to pull and model
 pdbs:
   - 7UU9
 #  - 7JPY
   - 7KQW
-#  - 6WEY # for when only SA can be done // standrad cam ne supressed
+  - 6WEY # for when only SA can be done // standrad cam ne supressed
+  - 7KPH
 
 # Prediction settings
 prediction_sources:
   - alphafold
   - colabfold
-
-# Total models generated per run (Standard ensemble size is 5)
-model_numbers: [1, 2, 3, 4, 5]
+model_numbers: [1, 2, 3, 4, 5]  
 
 # Alignment filtering parameters
 rmsd_min_threshold: 1.5  # Ensure models are structurally unique/divergent enough
@@ -57,10 +54,41 @@ manual_prediction_dirs:
 ###### - for specialty requests like simulated annelation
 #####################################
 
-
-
 ## Overrides for specific target runs
 custom_simulations:
+  6WEY:
+    empirical_canonical_structure:
+      #- protocol: 'simulated_annealing-1us+300K@0ns&450K@400ns&300K@900ns'
+      - protocol: 'simulated-annealing_1000ns'
+        compute_target: "HPC"
+        #length_ns: 1000
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 400, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+      - protocol: 'extended_1us'
+        compute_target: "HPC"
+        md_to_extend: "standard_100ns"
+      - protocol: 'extended_10us'
+        compute_target: "HPC"
+        md_to_extend: 'extended_1us'
+  7KPH:
+    empirical_canonical_structure:
+      - protocol: 'simulated-annealing_1000ns'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 400, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+    empirical_canonical_structure:
+      #- protocol: 'simulated-annealing_2000ns+300K@0ns&450K@200ns&300K@900ns'
+      - protocol: 'simulated-annealing_2000ns'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 400, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+
   7UU9:
     empirical_canonical_structure:
       - protocol: 'standard_100ns'
