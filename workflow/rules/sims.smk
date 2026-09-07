@@ -193,15 +193,32 @@ def resolve_slurm_job_script(wildcards, protocol):
 
 	if protocol is None:
 		protocol = getattr(wildcards, "protocol", "standard_100ns")
-	protocol_stem = protocol.split("_")[0]  # Extract the base protocol name (e.g., "extended" from "extended_1000ns")
 
+	protocol_stem = protocol.split("_")[0]
 	job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{protocol}"
+
+	time_limit = HPC_TIME  # Default time limit from environment variable
+
 	if protocol == "standard_100ns":
 		deffnm = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
 	else:
+		#time_limit = "48:00:00"  # Set a longer time limit for extended or other protocols
+		time_limit = '7-00:00:00' # 
+
 		deffnm = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{protocol}_md"
-	# Extract base protocol stem (e.g., 'standard' from 'standard_100ns', 'extended' from 'extended_1us')
-	#base_protocol = protocol.split("_")[0]
+
+	# Calculate absolute target total time in picoseconds (-until)
+	length_match = re.search(r'(\d+(?:\.\d+)?)\s*(us|ns|ps)', protocol, re.IGNORECASE)
+	if length_match:
+		val, unit = float(length_match.group(1)), length_match.group(2).lower()
+		if unit == "us":
+			until_ps = int(val * 1_000_000)
+		elif unit == "ns":
+			until_ps = int(val * 1_000)
+		else:
+			until_ps = int(val)
+	else:
+		until_ps = 1_000_000
 
 	# Include 'standard_100ns' and 'standard' in valid protocols
 	valid_protocols = ["standard", "standard_100ns", "simulated-annealing", "extended"]
@@ -212,11 +229,10 @@ def resolve_slurm_job_script(wildcards, protocol):
 	if protocol_stem=='extended':
 		md_execution_block = f"""\
 # --- Extended MD Execution Path ---
-# 1. Check if previous stage checkpoint exists to extend from
-if [ -f "{deffnm}_prev.cpt" ] && [ -f "{deffnm}_prev.tpr" ] && [ ! -f "{deffnm}.cpt" ]; then
-	echo "--> Extending TPR for extended stage..."
-	gmx_mpi convert-tpr -s "{deffnm}_prev.tpr" -extend ${{EXTEND_PS:-1000000}} -o "{deffnm}.tpr"
-	
+# --- Extended MD Execution Path (Option B: -until {until_ps} ps) ---
+if [ -f "parent.cpt" ] && [ -f "parent.tpr" ] && [ ! -f "{deffnm}.cpt" ]; then
+	echo "--> Extending TPR until target total duration ({until_ps} ps)..."
+	gmx_mpi convert-tpr -s "parent.tpr" -until {until_ps} -o "{deffnm}.tpr"	
 	echo "--> Starting extended run from previous checkpoint..."
 	srun --nodes=2 \\
 		--ntasks-per-node=16 \\
@@ -306,7 +322,7 @@ fi
 #SBATCH --nodes=2
 #SBATCH --ntasks-per-node=16
 #SBATCH --cpus-per-task=8
-#SBATCH --time={HPC_TIME}
+#SBATCH --time={time_limit}
 #SBATCH --no-requeue
 #SBATCH --exclusive
 
@@ -616,6 +632,21 @@ def log_sim_step(step_name, step_log_file, details=""):
 	with open(step_log_file, "a") as f:
 		f.write(line)
 
+def get_simulation_progress(ssh_target: str, remote_dir: str) -> str | None:
+	"""Helper to parse the latest step/time progress from remote md.log or slurm .out files."""
+	cmd = (
+		f"ssh -o BatchMode=yes {ssh_target} "
+		f"\"for f in '{remote_dir}'/*.log '{remote_dir}'/*.out '{remote_dir}'/JOB/*.log '{remote_dir}'/JOB/*.out; do "
+		f"[ -f \\\"\$f\\\" ] && tail -n 30 \\\"\$f\\\" | grep -E 'Step|Time|Vol|ETA' | tail -n 1; "
+		f"done | tail -n 1\""
+	)
+	try:
+		res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
+		out = res.stdout.strip()
+		return out if out else None
+	except Exception:
+		return None
+		
 def get_remote_gromacs_progress(
 	ssh_target: str, remote_dir: str, prefix: str
 ) -> str | None:
@@ -788,16 +819,19 @@ rule run_HPC_md:
 		ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
 
 		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns"
-		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_standard_100ns_md"
+		
+		# FIX: Standard 100ns uses standard prefix without protocol suffix
+		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
+		
 		job_dir = os.path.dirname(input.job_description)
 		local_dir = os.path.abspath(os.path.dirname(output.done))
 		step_log_file = os.path.join(job_dir, "simulation_steps.log")
 
 		clean_base = HPC_REMOTE_BASE.lstrip("~/")
 		remote_dir = os.path.join(clean_base, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
-		job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
+		#job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
+		job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_standard_100ns"
 
-		# Initialize HPC Engine
 		hpc = HPCJobManager(
 			ssh_target="komondor",
 			remote_dir=remote_dir,
@@ -811,23 +845,19 @@ rule run_HPC_md:
 		)
 
 		try:
-			# Progress function closure for MD heartbeat
 			def md_progress(ssh_target, r_dir):
 				return get_remote_gromacs_progress(ssh_target, r_dir, prefix)
 
-			# Execute full HPC pipeline
 			hpc.execute_pipeline(
 				completion_check_file=f"{prefix}.gro",
-				target_subdir="md_results_HPC",
-				poll_interval_sec=900,
+				target_subdir="./md_results_HPC/",
+				poll_interval_sec=60,
 				get_progress_fn=md_progress,
 				unpack_job_archive=True
 			)
 
-			# Write local Snakemake sentinel
 			with open(output.done, "w") as f:
 				f.write(f"HPC MD simulation completed for {target_id}.\n")
-
 
 			log_sim_step("DONE", step_log_file, "HPC MD rule finished successfully.")
 
@@ -841,9 +871,9 @@ rule finalize_md:
 		det_compute_scheduling = det_compute_scheduling
 	output:
 		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/md_completed.txt",
-		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.xtc",
-		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.tpr",
-		cpt_md = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.cpt"  # <-- CRITICAL FOR DAG RESOLUTION
+		xtc_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.xtc"),
+		tpr_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.tpr"),
+		cpt_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.cpt")  # <-- CRITICAL FOR DAG RESOLUTION
 	log:
 		"logs/{pdb}/{source}/{model_id}/finalize_md.log"
 	params:
@@ -851,6 +881,15 @@ rule finalize_md:
 			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/finalize_md.log"
 		)
 	run:
+		# ------------------------------------------------------------------
+		# SHORT-CIRCUIT: Skip if already finalized locally
+		# ------------------------------------------------------------------
+		out_dir = os.path.abspath(os.path.dirname(output.done))
+
+		if os.path.exists(output.done) and os.path.exists(output.xtc_md) and os.path.exists(output.tpr_md):
+			print(f"Target {wildcards.pdb}/{wildcards.source}/{wildcards.model_id} already finalized locally. Skipping HPC pull.")
+			return
+
 		# Setup Logger
 		log_path = params.log_abs
 		os.makedirs(os.path.dirname(log_path), exist_ok=True)
@@ -860,57 +899,59 @@ rule finalize_md:
 		logger.handlers.clear()
 
 		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-		fh = logging.FileHandler(log_path, mode="a")
-		fh.setFormatter(fmt)
-		logger.addHandler(fh)
-
-		ch = logging.StreamHandler()
-		ch.setFormatter(fmt)
-		logger.addHandler(ch)
+		fh = logging.FileHandler(log_path, mode="a"); fh.setFormatter(fmt); logger.addHandler(fh)
+		ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
 
 		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns"
-		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_standard_100ns_md"
+		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
 		compute_target = get_compute_target(wildcards)
 
-		out_dir = os.path.abspath(os.path.dirname(output.done))
 		os.makedirs(out_dir, exist_ok=True)
 
-		job_dir = os.path.abspath(f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/JOB")
-		hpc_staging_dir = os.path.abspath(f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns/md_results_HPC")
+		protocol_dir = os.path.abspath(f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
+		job_dir = os.path.join(protocol_dir, "JOB")
+		hpc_staging_dir = os.path.join(protocol_dir, "md_results_HPC")
 
 		logger.info("Starting finalize_md phase for %s [Compute Target: %s]", target_id, compute_target)
 
 		try:
 			# ------------------------------------------------------------------
-			# HPC PATH: Move artifacts from md_results_HPC -> md_results
+			# HPC PATH: Relocate from md_results_HPC -> md_results
 			# ------------------------------------------------------------------
 			if compute_target == "HPC":
 				if os.path.exists(hpc_staging_dir):
 					logger.info("Staging directory found at %s. Moving artifacts to %s...", hpc_staging_dir, out_dir)
 					moved_count = 0
 
-					for fn in os.listdir(hpc_staging_dir):
-						src = os.path.join(hpc_staging_dir, fn)
-						dst = os.path.join(out_dir, fn)
-						
+					for item in os.listdir(hpc_staging_dir):
+						src = os.path.join(hpc_staging_dir, item)
+						dst = os.path.join(out_dir, item)
+
 						if os.path.isfile(src):
 							shutil.move(src, dst)
-							logger.info("Moved file: %s -> %s", fn, dst)
+							logger.info("Moved file: %s -> %s", item, dst)
 							moved_count += 1
 						elif os.path.isdir(src):
-							logger.info("Scanning nested directory inside staging: %s", fn)
+							logger.info("Scanning nested directory inside staging: %s", item)
 							for nested_fn in os.listdir(src):
 								nested_src = os.path.join(src, nested_fn)
 								nested_dst = os.path.join(out_dir, nested_fn)
 								shutil.move(nested_src, nested_dst)
 								logger.info("Moved nested file: %s -> %s", nested_fn, nested_dst)
 								moved_count += 1
-					
+
 					logger.info("Successfully relocated %d items from HPC staging.", moved_count)
 					shutil.rmtree(hpc_staging_dir, ignore_errors=True)
 					logger.info("Cleaned up staging folder: %s", hpc_staging_dir)
 				else:
-					logger.warning("HPC staging directory %s does not exist. Checking destination directly...", hpc_staging_dir)
+					logger.warning("HPC staging directory %s does not exist. Checking protocol root for fallback files...", hpc_staging_dir)
+					# Fallback: Move matching files directly from protocol_dir if they were downloaded at protocol root
+					for ext in [".xtc", ".tpr", ".cpt", ".gro", ".edr", ".log"]:
+						src = os.path.join(protocol_dir, f"{prefix}{ext}")
+						dst = os.path.join(out_dir, f"{prefix}{ext}")
+						if os.path.exists(src) and not os.path.exists(dst):
+							shutil.move(src, dst)
+							logger.info("Moved fallback file from protocol root: %s -> %s", src, dst)
 
 				# Fallback check for generic 'md.xtc' naming
 				generic_xtc = os.path.join(out_dir, "md.xtc")
@@ -960,7 +1001,6 @@ rule finalize_md:
 					logger.error(err_msg)
 					raise ValueError(err_msg)
 
-				# Copy matching MD outputs from JOB into md_results
 				if os.path.isdir(job_dir):
 					logger.info("Collecting local MD outputs from %s into %s...", job_dir, out_dir)
 					copied_count = 0
@@ -975,13 +1015,11 @@ rule finalize_md:
 								logger.warning("Failed to copy %s to %s: %s", src, dst, str(c_err))
 					logger.info("Copied %d local simulation artifacts.", copied_count)
 
-				# Fallback check for generic md.xtc
 				generic_xtc = os.path.join(out_dir, "md.xtc")
 				if not os.path.exists(output.xtc_md) and os.path.exists(generic_xtc):
 					os.rename(generic_xtc, output.xtc_md)
 					logger.info("Renamed generic 'md.xtc' to '%s'", output.xtc_md)
 
-				# Validate outputs
 				if not os.path.exists(output.xtc_md) or not os.path.exists(output.tpr_md):
 					err_msg = f"Local MD completed, but missing expected outputs (.xtc / .tpr) in {out_dir}"
 					logger.error(err_msg)
@@ -997,7 +1035,7 @@ rule finalize_md:
 
 		except Exception as err:
 			logger.exception("Finalization failed for target %s: %s", target_id, str(err))
-			raise	
+			raise
 				
 #rule finalize_md:
 #	input:
@@ -1135,8 +1173,7 @@ rule pbc_correction_and_extract:
 			-o md_whole.xtc \
 			-pbc mol -ur compact > "$LOG_ABS" 2>&1
 
-		# 2. Fit rotational/translational drift (printf with double backslash guarantees two distinct lines)
-		printf "Protein Protein Protein" | gmx trjconv \
+		echo "Protein Protein Protein" | gmx trjconv \
 			-f md_whole.xtc \
 			-s $(basename {input.tpr_md}) \
 			-o md_clean.xtc \
@@ -1380,13 +1417,11 @@ rule schedule_custom_md:
 		def_compute_target = config.get("default_compute_target", "local")
 		nested_key = f"{wildcards.source}_{wildcards.model_id}"
 
-		# Retrieve target entry from custom_simulations config
 		pdb_config_entries = (
 			config.get("custom_simulations", {})
 			.get(wildcards.pdb, {})
 			.get(nested_key, [])
 		)
-
 		pdb_config = next((entry for entry in pdb_config_entries if entry.get("protocol") == wildcards.protocol), {})
 		compute_target = pdb_config.get("compute_target", def_compute_target)
 
@@ -1397,24 +1432,32 @@ rule schedule_custom_md:
 		exec_dir = work_dir
 		tpr_path = os.path.abspath(output.tpr_file)
 
+		# Calculate absolute target total time in picoseconds (-until)
+		length_match = re.search(r'(\d+(?:\.\d+)?)\s*(us|ns|ps)', wildcards.protocol, re.IGNORECASE)
+		if length_match:
+			val, unit = float(length_match.group(1)), length_match.group(2).lower()
+			if unit == "us":
+				until_ps = int(val * 1_000_000)
+			elif unit == "ns":
+				until_ps = int(val * 1_000)
+			else:
+				until_ps = int(val)
+		else:
+			until_ps = 1_000_000  # Fallback to 1,000,000 ps (1 us total time)
+
 		# Build .tpr file if it doesn't exist
 		if not os.path.exists(tpr_path):
 			if hasattr(input, "cpt") and hasattr(input, "tpr"):
-				# Extension Run: Parse length and extend previous TPR with gmx convert-tpr
-				# Length parsed from protocol string or explicit config parameter
-				import re
-				length_match = re.search(r'(\d+(?:\.\d+)?)\s*(us|ns)', wildcards.protocol, re.IGNORECASE)
-				if length_match:
-					val, unit = float(length_match.group(1)), length_match.group(2).lower()
-					extend_ps = int((val * 1000.0) if unit == "us" else val) * 1000
-				else:
-					extend_ps = 1000000  # Default fallback 1 us (1,000,000 ps)
+				# Always stage parent files into JOB directory under standardized names
+				shutil.copy2(input.cpt, os.path.join(work_dir, "parent.cpt"))
+				shutil.copy2(input.tpr, os.path.join(work_dir, "parent.tpr"))
 
+				# Option B: Extend simulation UNTIL total time equals until_ps
 				shell("""
-					gmx convert-tpr -s {input.tpr} -extend {extend_ps} -o {tpr_path} > {params.log_abs} 2>&1
+					gmx convert-tpr -s {work_dir}/parent.tpr -until {until_ps} -o {tpr_path} > {params.log_abs} 2>&1
 				""")
 			else:
-				# Fresh Run (Simulated Annealing): Run grompp with custom MDP
+				# Fresh non-extension runs (e.g., simulated annealing)
 				shutil.copy(input.gro_cg, os.path.join(exec_dir, os.path.basename(input.gro_cg)))
 				shutil.copy(input.top, os.path.join(exec_dir, os.path.basename(input.top)))
 				shutil.copy(input.custom_mdp, os.path.join(exec_dir, os.path.basename(input.custom_mdp)))
@@ -1428,14 +1471,16 @@ rule schedule_custom_md:
 						-p $(basename {input.top}) -maxwarn 1 > {params.log_abs} 2>&1
 				""")
 
-				# Clean temporary copies
 				os.remove(os.path.join(exec_dir, os.path.basename(input.gro_cg)))
 				os.remove(os.path.join(exec_dir, os.path.basename(input.top)))
 				os.remove(os.path.join(exec_dir, os.path.basename(input.custom_mdp)))
 
-		# Write execution target metadata to scheduling.yml
+		# Save scheduling info including calculated UNTIL_PS parameter for HPC batch script resolution
 		if compute_target in ["local", "HPC"]:
-			scheduling_info = {"COMPUTE": compute_target}
+			scheduling_info = {
+				"COMPUTE": compute_target,
+				"UNTIL_PS": until_ps
+			}
 			with open(output.scheduling, "w") as f:
 				yaml.safe_dump(scheduling_info, f, sort_keys=False)
 		else:
@@ -1722,6 +1767,7 @@ rule run_custom_md_HPC:
 
 		clean_base = HPC_REMOTE_BASE.lstrip("~/")
 		remote_dir = os.path.join(clean_base, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}")
+		#job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{wildcards.protocol}"
 		job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{wildcards.protocol}"
 
 		hpc = HPCJobManager(
@@ -1737,14 +1783,14 @@ rule run_custom_md_HPC:
 		)
 
 		try:
-			def md_progress(ssh_target, r_dir):
-				return get_remote_gromacs_progress(ssh_target, r_dir, prefix)
+			#def md_progress(ssh_target, r_dir):
+			#	return get_remote_gromacs_progress(ssh_target, r_dir, prefix)
 
 			hpc.execute_pipeline(
 				completion_check_file=f"{prefix}.gro",
 				target_subdir=".",
 				poll_interval_sec=900,
-				get_progress_fn=md_progress,
+				get_progress_fn=get_simulation_progress,
 				unpack_job_archive=True
 			)
 
@@ -1764,9 +1810,9 @@ rule finalize_custom_md:
 		done_flag = det_compute_scheduling
 	output:
 		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
-		xtc_md = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.xtc",
-		tpr_md = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.tpr",
-		cpt_md = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.cpt"  # <-- REQUIRED FOR MULTI-STAGE EXTENSIONS
+		xtc_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.xtc"),
+		tpr_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.tpr"),
+		cpt_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.cpt")  # <-- REQUIRED FOR MULTI-STAGE EXTENSIONS
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/finalize_custom_md.log"
 	params:
@@ -1774,6 +1820,12 @@ rule finalize_custom_md:
 			f"logs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/finalize_custom_md.log"
 		)
 	run:
+		# SHORTCIRCUIT
+		if os.path.exists(output.done) and os.path.exists(output.xtc_md) and os.path.exists(output.tpr_md):
+			print(f"Target {wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol} already finalized locally. Skipping HPC pull.")
+			return
+
+
 		# Setup Logger
 		log_path = params.log_abs
 		os.makedirs(os.path.dirname(log_path), exist_ok=True)

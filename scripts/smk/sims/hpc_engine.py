@@ -264,6 +264,12 @@ class HPCJobManager:
         Main entrypoint: Orchestrates directory setup, status checks, 
         submission/monitoring, and automatic retrieval.
         """
+        # 0. LOCAL OVERRIDE: If local finalized output already exists, exit immediately!
+        local_finalized_sentinel = os.path.join(self.local_dir, "md_results", "md_completed.txt")
+        if os.path.exists(local_finalized_sentinel):
+            self.logger.info("Local finalized results found at %s. Skipping HPC checks/downloads.", local_finalized_sentinel)
+            self._log_step("LOCAL_CHECK", "Local finalized results already present. HPC step bypassed.")
+            return
         # 1. Ensure remote target directory exists
         self._run_ssh(f"mkdir -p '{self.remote_dir}'")
 
