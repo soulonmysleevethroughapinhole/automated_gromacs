@@ -10,6 +10,7 @@ import subprocess
 import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
+import shutil
 
 load_dotenv()
 
@@ -68,17 +69,22 @@ def main():
     parts = p.parts
     try:
         idx_mopac = parts.index("mopac")
-        idx_std = parts.index("standard_100ns")
+        #idx_std = parts.index("standard_100ns")
         pdb = parts[idx_mopac + 1]
         source = parts[idx_mopac + 2]
-        model_id = "/".join(parts[idx_mopac + 3 : idx_std])
-        protocol = parts[idx_std]
+        model_id = parts[idx_mopac + 3]
+        protocol = parts[idx_mopac + 4]
+
+
+        #model_id = "/".join(parts[idx_mopac + 3 : idx_std])
+        #protocol = parts[idx_std]
     except (ValueError, IndexError) as e:
         print(f"Error parsing path wildcards from {job_description}: {e}")
         sys.exit(1)
 
-    target_id = f"{pdb}/{source}/{model_id}"
-    prefix = f"{pdb}_{source}_{model_id.replace('/', '_')}"
+    target_id = f"{pdb}/{source}/{model_id}/{protocol}"
+    #prefix = f"{pdb}_{source}_{model_id.replace('/', '_')}"
+    prefix = f"{pdb}_{source}_{model_id}_{protocol}"
 
     # Setup Logger
     logger = logging.getLogger(f"mopac_{prefix}")
@@ -160,6 +166,12 @@ def main():
     logger.info("📦 Pulling MOPAC result archive locally...")
     hpc.pull_results(target_subdir="")
 
+    # Remove any stray unpacked MOPAC_STAGED or EM_FRAMES folders brought down by rsync
+    for stray_dir in ["MOPAC_STAGED", "EM_FRAMES", "FRAMES"]:
+        stray_path = os.path.join(local_dir, stray_dir)
+        if os.path.exists(stray_path) and os.path.isdir(stray_path):
+            shutil.rmtree(stray_path)
+
     if not os.path.exists(output_tar):
         # Fallback move if pulled directly into parent directory
         alt_tar = os.path.join(os.path.dirname(local_dir), "mopac_results.tar.gz")
@@ -175,9 +187,15 @@ def main():
 
     with tempfile.TemporaryDirectory() as temp_dir:
         with tarfile.open(output_tar, "r:gz") as tar:
-            tar.extractall(path=temp_dir, filter='data')
+            #tar.extractall(path=temp_dir, filter='data')
+            # Extract only .arc files directly into temp_dir
+            for member in tar.getmembers():
+                if member.name.endswith(".arc"):
+                    member.name = os.path.basename(member.name)  # Strip directory path
+                    tar.extract(member, path=temp_dir, filter='data')
+        arc_files = glob.glob(os.path.join(temp_dir, "*.arc"))
 
-        arc_files = glob.glob(os.path.join(temp_dir, "**", "*.arc"), recursive=True)
+        #arc_files = glob.glob(os.path.join(temp_dir, "**", "*.arc"), recursive=True)
         if not arc_files:
             logger.error("❌ No .arc files found inside %s", output_tar)
             raise FileNotFoundError(f"No .arc files found in {output_tar}")

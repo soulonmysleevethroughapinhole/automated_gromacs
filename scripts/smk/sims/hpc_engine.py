@@ -3,6 +3,7 @@ import time
 import logging
 import subprocess
 import yaml
+import shutil
 
 def get_simulation_progress(ssh_target: str, remote_dir: str) -> str | None:
     """Helper to parse the latest frame/time progress from remote md.log."""
@@ -53,7 +54,7 @@ def execute_hpc_md(
     logger.addHandler(ch)
 
     target_id = f"{pdb}/{source}/{model_id}/{protocol}"
-    prefix = f"{pdb}_{source}_{model_id}_md"
+    prefix = f"{pdb}_{source}_{model_id}_{protocol}_md"
     job_script_filename = f"{prefix}_job.job"
 
     job_dir = os.path.abspath(os.path.dirname(job_description_path))
@@ -96,7 +97,8 @@ def execute_hpc_md(
         # Expects {prefix}.gro upon completion
         manager.execute_pipeline(
             completion_check_file=f"{prefix}.gro",
-            target_subdir=".",  # Pull directly into protocol folder
+            #target_subdir=".",  # Pull directly into protocol folder
+            target_subdir="md_results_HPC",  # Pull directly into protocol folder
             poll_interval_sec=300, # Poll Slurm status every 5 minutes
             get_progress_fn=get_simulation_progress,
             unpack_job_archive=True

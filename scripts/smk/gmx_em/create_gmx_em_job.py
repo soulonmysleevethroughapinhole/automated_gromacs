@@ -4,6 +4,8 @@ import os
 import textwrap
 from pathlib import Path
 from dotenv import load_dotenv
+import tarfile
+import glob
 
 load_dotenv()  # Load environment variables from .env file
 
@@ -17,7 +19,20 @@ HPC_TIME = os.getenv("HPC_TIME", "00:10:00")
 SUBMIT_HPC = os.getenv("SUBMIT_HPC", "0")
 SSH_DAEMON_PORT = os.getenv("SSH_DAEMON_PORT", "22")
 
-def generate_em_slurm_job(job_output_path, prefix):
+def count_frames_in_tar(tar_path):
+    """Inspects tarball or directory to dynamically determine frame count."""
+    if os.path.isfile(tar_path) and tarfile.is_tarfile(tar_path):
+        with tarfile.open(tar_path, "r:*") as tar:
+            members = [m.name for m in tar.getmembers() if m.name.endswith(".pdb")]
+            return len(members)
+    elif os.path.isdir(tar_path):
+        pdbs = glob.glob(os.path.join(tar_path, "**", "*.pdb"), recursive=True)
+        return len(pdbs)
+    #return 100  # Fallback if tarball is not locally present yet
+    raise ValueError('cant count number of frames in tar')
+
+def generate_em_slurm_job(job_output_path, prefix, total_frames):
+    max_array_index = max(0, total_frames - 1)
     slurm_script = textwrap.dedent(f"""\
 #!/bin/bash
 #SBATCH --job-name=em_{prefix}
@@ -28,7 +43,7 @@ def generate_em_slurm_job(job_output_path, prefix):
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --array=0-100%32
+#SBATCH --array=0-{max_array_index}%32
 #SBATCH --time={HPC_TIME}
 #SBATCH --no-requeue
 
@@ -46,20 +61,31 @@ export OMP_PROC_BIND=close
 export gmxhome={HPC_GMX_HOME}
 export PATH="${{gmxhome}}/bin:${{PATH}}"
 export LD_LIBRARY_PATH="${{gmxhome}}/lib64:${{gmxhome}}/lib:${{LD_LIBRARY_PATH}}"
+# Unpack frame archive if not already unpacked
 
-FRAME_ID=${{SLURM_ARRAY_TASK_ID}}
-INPUT_PDB="FRAMES/frame_${{FRAME_ID}}.pdb"
-WORK_DIR="work_frame_${{FRAME_ID}}"
-
-if [ ! -f "$INPUT_PDB" ]; then
-    # Fallback check for ununderscored frame naming convention (frame0.pdb)
-    INPUT_PDB="FRAMES/frame${{FRAME_ID}}.pdb"
+if [ -f "FRAMES_compressed.tar.gz" ] && [ ! -d "FRAMES" ]; then
+    mkdir -p FRAMES
+    tar -xzf FRAMES_compressed.tar.gz -C .
 fi
 
-if [ ! -f "$INPUT_PDB" ]; then
-    echo "Frame $INPUT_PDB not found, skipping."
+shopt -s extglob nullglob
+FRAME_FILES=($(ls -v FRAMES/*.pdb 2>/dev/null))
+
+if [ ${{#FRAME_FILES[@]}} -eq 0 ]; then
+    echo "❌ ERROR: No PDB frame files found in FRAMES/"
+    exit 1
+fi
+
+INPUT_PDB="${{FRAME_FILES[${{SLURM_ARRAY_TASK_ID}}]}}"
+
+if [ -z "$INPUT_PDB" ] || [ ! -f "$INPUT_PDB" ]; then
+    echo "Task ID ${{SLURM_ARRAY_TASK_ID}} out of range or file missing, skipping."
     exit 0
 fi
+
+# Extract base filename for job isolation
+FRAME_NAME=$(basename "$INPUT_PDB" .pdb)
+WORK_DIR="work_${{FRAME_NAME}}"
 
 mkdir -p "$WORK_DIR"
 cd "$WORK_DIR"
@@ -135,14 +161,14 @@ EOF
 # ----------------------------------------------------------------------
 
 # 1. Generate Topology & Hydrogen Placement
-gmx_mpi pdb2gmx -f "../$INPUT_PDB" -o "frame_${{FRAME_ID}}_processed.gro" -p "topol.top" -ff amber99sb-ildn -water tip3p -ignh >> em_frame.log 2>&1
+gmx_mpi pdb2gmx -f "../$INPUT_PDB" -o "${{FRAME_NAME}}_processed.gro" -p "topol.top" -ff amber99sb-ildn -water tip3p -ignh >> em_frame.log 2>&1
 
 # 2. Define Box and Solvate
-gmx_mpi editconf -f "frame_${{FRAME_ID}}_processed.gro" -o "frame_${{FRAME_ID}}_newbox.gro" -d 1.0 -bt cubic >> em_frame.log 2>&1
-gmx_mpi solvate -cp "frame_${{FRAME_ID}}_newbox.gro" -cs spc216.gro -o "frame_${{FRAME_ID}}_solv.gro" -p topol.top >> em_frame.log 2>&1
+gmx_mpi editconf -f "${{FRAME_NAME}}_processed.gro" -o "${{FRAME_NAME}}_newbox.gro" -d 1.0 -bt cubic >> em_frame.log 2>&1
+gmx_mpi solvate -cp "${{FRAME_NAME}}_newbox.gro" -cs spc216.gro -o "${{FRAME_NAME}}_solv.gro" -p topol.top >> em_frame.log 2>&1
 
 # 3. Add Ions (Neutralize)
-gmx_mpi grompp -v -f emw_steep_hydr.mdp -c "frame_${{FRAME_ID}}_solv.gro" -r "frame_${{FRAME_ID}}_solv.gro" -o ion_prep.tpr -p topol.top -maxwarn 2 >> em_frame.log 2>&1
+gmx_mpi grompp -v -f emw_steep_hydr.mdp -c "${{FRAME_NAME}}_solv.gro" -r "${{FRAME_NAME}}_solv.gro" -o ion_prep.tpr -p topol.top -maxwarn 2 >> em_frame.log 2>&1
 echo "SOL" | gmx_mpi genion -s ion_prep.tpr -o ion_b4em.gro -p topol.top -pname NA -nname CL -neutral >> em_frame.log 2>&1
 
 # 4. Stage 1: Steepest Descent Minimization
@@ -155,7 +181,7 @@ gmx_mpi mdrun -v -s cg.tpr -o cg.trr -c after_cg.gro -g cg.log -ntomp 4 >> em_fr
 
 # 6. Extract Final Cleaned Protein Structure
 mkdir -p ../EM_FRAMES
-echo "Protein" | gmx_mpi trjconv -s cg.tpr -f after_cg.gro -o "../EM_FRAMES/frame_${{FRAME_ID}}.pdb" -pbc mol -ur compact >> em_frame.log 2>&1
+echo "Protein" | gmx_mpi trjconv -s cg.tpr -f after_cg.gro -o "../EM_FRAMES/${{FRAME_NAME}}.pdb" -pbc mol -ur compact >> em_frame.log 2>&1
 
 cd ..
 rm -rf "$WORK_DIR"
@@ -183,13 +209,15 @@ def main():
         pdb = parts[gmx_idx + 1]
         source = parts[gmx_idx + 2]
         model_id = parts[gmx_idx + 3]
-        prefix = f"{pdb}_{source}_{model_id}"
+        protocol = parts[gmx_idx + 4]
+        prefix = f"{pdb}_{source}_{model_id}_{protocol}"
     except (ValueError, IndexError):
         # Fallback to output script filename parsing
         job_filename = Path(output_job).name
         prefix = job_filename.replace("_em_job.job", "").replace("_md_job.job", "")
 
-    generate_em_slurm_job(output_job, prefix)
+    total_frames = count_frames_in_tar(input_tar)
+    generate_em_slurm_job(output_job, prefix, total_frames)
     print(f"Generated Slurm EM Job script for {prefix}: {output_job}")
 
 if __name__ == "__main__":

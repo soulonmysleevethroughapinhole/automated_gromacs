@@ -15,7 +15,7 @@ rule run_mopac_hof_calc:
 		job_description = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/mopac_job_description.txt"
 	output:
 		heat_of_formation = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation.csv",
-		calc_tar = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/mopac_results.tar.gz"
+		#calc_tar = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/mopac_results.tar.gz"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/mopac/run_mopac_hof_calc.log"
 	shell:

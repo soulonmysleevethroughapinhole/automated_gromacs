@@ -37,8 +37,8 @@ def main():
         logger.error("Failed to parse wildcards from job description path: %s", job_description)
         sys.exit(1)
 
-    target_id = f"{pdb}/{source}/{model_id}"
-    prefix = f"{pdb}_{source}_{model_id}"
+    target_id = f"{pdb}/{source}/{model_id}/{protocol}"
+    prefix = f"{pdb}_{source}_{model_id}_{protocol}"
     
     # Locate input frame tar archive
     input_tar = os.path.abspath(f"results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz")

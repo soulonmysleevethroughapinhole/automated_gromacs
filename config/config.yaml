@@ -8,6 +8,7 @@
 default_compute_target: HPC # local, hpc
 #default_compute_target: local # local, hpc
 
+# are these even used
 protocols:
   standard_100ns:
     mdp_file: "config/gromacs_settings/interruptable_config_ultimate/md.mdp"
@@ -41,7 +42,7 @@ prediction_sources:
 model_numbers: [1, 2, 3, 4, 5]  
 
 # Alignment filtering parameters
-rmsd_min_threshold: 1.5  # Ensure models are structurally unique/divergent enough
+rmsd_min_threshold: 1.5  # Ensure models are structurally unique/divergent enough before running MD sims
 
 manual_prediction_dirs:
   alphafold: data/manual_predictions/alphafold/
@@ -65,7 +66,7 @@ custom_simulations:
         temperature_schedule:
           - { time_ns: 0, temp_k: 300 }
           - { time_ns: 400, temp_k: 450 }
-          - { time_ns: 900, temp_k: 300 }
+          - { time_ns: 900, temp_k: 300 } # NOTE: maybe if two SA runs are scheduled w same temp schedule, then 2nd can be run as an extension 
       - protocol: 'extended_1us'
         compute_target: "HPC"
         md_to_extend: "standard_100ns"
@@ -74,12 +75,12 @@ custom_simulations:
         md_to_extend: 'extended_1us'
   7KPH:
     empirical_canonical_structure:
-      - protocol: 'simulated-annealing_1000ns'
+      - protocol: 'simulated-annealing_1000ns_gyorsfűtés'
         compute_target: "HPC"
         temperature_schedule:
           - { time_ns: 0, temp_k: 300 }
-          - { time_ns: 400, temp_k: 450 }
-          - { time_ns: 900, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 500, temp_k: 300 }
     empirical_canonical_structure:
       #- protocol: 'simulated-annealing_2000ns+300K@0ns&450K@200ns&300K@900ns'
       - protocol: 'simulated-annealing_2000ns'
