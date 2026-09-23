@@ -44,7 +44,7 @@ def generate_em_slurm_job(job_output_path, prefix, total_frames):
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --array=0-{max_array_index}%32
-#SBATCH --time={HPC_TIME}
+#SBATCH --time="00:15:00"
 #SBATCH --no-requeue
 
 # Load GROMACS modules

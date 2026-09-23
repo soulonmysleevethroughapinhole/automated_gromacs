@@ -157,7 +157,7 @@ def main():
         if not job_id:
             job_id = hpc.submit_job(unpack_job_archive=False)
 
-        hpc.monitor_job(job_id, poll_interval_sec=120)
+        hpc.monitor_job(job_id, completion_check_file='heat_of_formation.csv', poll_interval_sec=120)
 
         if not prepare_and_check_completion():
             raise RuntimeError("MOPAC job completed on HPC but mopac_results.tar.gz was not generated or contains no .arc files.")

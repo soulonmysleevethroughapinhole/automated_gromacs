@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.abspath("scripts/smk/sims"))
 from hpc_engine import HPCJobManager
 
+
 wildcard_constraints:
 	pdb = "[^/]+",
 	source = "[^/]+",
@@ -189,6 +190,7 @@ rule minimize_conjugate:
 
 def resolve_slurm_job_script(wildcards, protocol):
 
+
 	##job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{protocol}"
 
 	if protocol is None:
@@ -235,7 +237,7 @@ if [ -f "parent.cpt" ] && [ -f "parent.tpr" ] && [ ! -f "{deffnm}.cpt" ]; then
 	gmx_mpi convert-tpr -s "parent.tpr" -until {until_ps} -o "{deffnm}.tpr"	
 	echo "--> Starting extended run from previous checkpoint..."
 	srun --nodes=2 \\
-		--ntasks-per-node=16 \\
+		--ntasks-per-node=32 \\
 		--cpus-per-task=8 \\
 		--cpu-bind=cores \\
 		gmx_mpi mdrun -v -deffnm "{deffnm}" \\
@@ -276,26 +278,26 @@ run_md() {{
 	local name="$1"
 	if [ -f "${{name}}.cpt" ]; then
 		echo "--> Resuming ${{name}} from checkpoint..."
-		srun --nodes=2 \
-			--ntasks-per-node=16 \
-			--cpus-per-task=8 \
-			--cpu-bind=cores \ 
-			gmx_mpi mdrun -v -deffnm "${{name}}" \
-				-dds 0.8 \
-				-ntomp 8 \
-				-rcon 0 \
-				-dlb yes \
+		srun --nodes=2 \\
+			--ntasks-per-node=16 \\
+			--cpus-per-task=8 \\
+			--cpu-bind=cores \\
+			gmx_mpi mdrun -v -deffnm "${{name}}" \\
+				-dds 0.8 \\
+				-ntomp 8 \\
+				-rcon 0 \\
+				-dlb yes \\
 				-cpi "${{name}}.cpt"
 	else
 		echo "--> Starting ${{name}}..."
-		srun --nodes=2 \
-			--ntasks-per-node=16 \
-			--cpus-per-task=8 \
-			--cpu-bind=cores \
-			gmx_mpi mdrun -v -deffnm "${{name}}" \
-				-ntomp 8 \
-				-dds 0.8 \
-				-rcon 0 \
+		srun --nodes=2 \\
+			--ntasks-per-node=16 \\
+			--cpus-per-task=8 \\
+			--cpu-bind=cores \\
+			gmx_mpi mdrun -v -deffnm "${{name}}" \\
+				-ntomp 8 \\
+				-dds 0.8 \\
+				-rcon 0 \\
 				-dlb yes 
 	fi
 }}
@@ -309,6 +311,26 @@ fi
 	#else:
 	#	raise ValueError(f"{protocol} not recognized as an approved protocol for slurm job")
 
+	SBATCH_NODES=2
+	SBATCH_NTASKS_PER_NODE=16
+	SBATCH_CPUS_PER_TASK=8
+
+	OMP_NUM_THREADS=8
+	OMP_PROC_BIND="close"
+
+	#dds_flag = '-dds 0.8'
+
+	if protocol_stem == 'simulated_annealing':
+		SBATCH_NTASKS_PER_NODE=32
+		SBATCH_CPUS_PER_TASK=4
+		
+		OMP_NUM_THREADS=4
+		OMP_PROC_BIND="spread"
+
+		#dds_flag = ''
+
+
+
 	return f"""#! /bin/bash
 # Komondor Slurm Template for Gromacs 2025.4 (Compiled: MPI noCUDA)
 # Run: CPU, MPI
@@ -319,9 +341,9 @@ fi
 #SBATCH --error={deffnm}_%j.err
 #SBATCH --account={HPC_ACCOUNT}
 #SBATCH --partition={HPC_PARTITION}
-#SBATCH --nodes=2
-#SBATCH --ntasks-per-node=16
-#SBATCH --cpus-per-task=8
+#SBATCH --nodes={SBATCH_NODES}
+#SBATCH --ntasks-per-node={SBATCH_NTASKS_PER_NODE}
+#SBATCH --cpus-per-task={SBATCH_CPUS_PER_TASK}
 #SBATCH --time={time_limit}
 #SBATCH --no-requeue
 #SBATCH --exclusive
@@ -333,9 +355,9 @@ module load gcc/12.2.0
 module load cray-mpich
 module load cray-fftw
 
-export OMP_NUM_THREADS=8
+export OMP_NUM_THREADS={OMP_NUM_THREADS}
 export OMP_PLACES=cores
-export OMP_PROC_BIND=close
+export OMP_PROC_BIND={OMP_PROC_BIND}
 
 # set network and cray mpich env
 #export MPICH_SMP_SINGLE_COPY_MODE=NONE
@@ -636,9 +658,9 @@ def get_simulation_progress(ssh_target: str, remote_dir: str) -> str | None:
 	"""Helper to parse the latest step/time progress from remote md.log or slurm .out files."""
 	cmd = (
 		f"ssh -o BatchMode=yes {ssh_target} "
-		f"\"for f in '{remote_dir}'/*.log '{remote_dir}'/*.out '{remote_dir}'/JOB/*.log '{remote_dir}'/JOB/*.out; do "
-		f"[ -f \\\"\$f\\\" ] && tail -n 30 \\\"\$f\\\" | grep -E 'Step|Time|Vol|ETA' | tail -n 1; "
-		f"done | tail -n 1\""
+        r'"for f in ' f"'{remote_dir}'" r"/*.log '" f"{remote_dir}" r"'/*.out '" f"{remote_dir}" r"'/JOB/*.log '" f"{remote_dir}" r"'/JOB/*.out; do "
+        r'[ -f "$f" ] && tail -n 30 "$f" | grep -E "Step|Time|Vol|ETA" | tail -n 1; '
+        r'done | tail -n 1"'
 	)
 	try:
 		res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
@@ -683,6 +705,93 @@ def get_remote_gromacs_progress(
 		return f"{ps_val / 1000.0:.2f} ns"
 	except (IndexError, ValueError):
 		return None
+
+def execute_hpc_md_pipeline(
+    wildcards,
+    job_description_path,
+    output_done_path,
+    log_path,
+    protocol=None,
+    target_subdir="./md_results_HPC/",
+    poll_interval_sec=300,
+    get_progress_fn=None
+):
+    """
+    Unified execution handler for standard and custom HPC MD simulations.
+    """
+    pdb = wildcards.pdb
+    source = wildcards.source
+    model_id = wildcards.model_id
+    protocol = protocol or getattr(wildcards, "protocol", "standard_100ns")
+
+    # Setup isolated logging directory and handler
+    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
+    logger_name = f"run_hpc_md_{pdb}_{source}_{model_id}_{protocol}"
+    logger = logging.getLogger(logger_name)
+    logger.setLevel(logging.INFO)
+    logger.handlers.clear()
+
+    fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+    fh = logging.FileHandler(log_path, mode="a"); fh.setFormatter(fmt); logger.addHandler(fh)
+    ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
+
+    target_id = f"{pdb}/{source}/{model_id}/{protocol}"
+    
+    # Prefix determination based on protocol
+    if protocol == "standard_100ns":
+        prefix = f"{pdb}_{source}_{model_id}_md"
+    else:
+        prefix = f"{pdb}_{source}_{model_id}_{protocol}_md"
+
+    job_dir = os.path.dirname(job_description_path)
+    local_dir = os.path.abspath(os.path.dirname(output_done_path))
+    step_log_file = os.path.join(job_dir, "simulation_steps.log")
+
+    clean_base = HPC_REMOTE_BASE.lstrip("~/")
+    remote_dir = os.path.join(clean_base, pdb, source, model_id, protocol)
+    job_name = f"md_{pdb}_{source}_{model_id}_{protocol}"
+
+    hpc = HPCJobManager(
+        ssh_target="komondor",
+        remote_dir=remote_dir,
+        local_dir=local_dir,
+        job_name=job_name,
+        job_script=os.path.basename(job_description_path),
+        log_path=log_path,
+        logger=logger,
+        step_log_file=step_log_file,
+        hpc_user=HPC_USER,
+    )
+
+    try:
+        # Fallback to standard progress tracker if custom function is not passed
+        if get_progress_fn is None:
+            if callable(globals().get("get_remote_gromacs_progress")):
+                get_progress_fn = lambda ssh_tgt, r_dir, j_id=None: get_remote_gromacs_progress(ssh_tgt, r_dir, prefix)
+            else:
+                get_progress_fn = get_simulation_progress
+
+        hpc.execute_pipeline(
+            completion_check_file=f"{prefix}.gro",
+            target_subdir=target_subdir,
+            poll_interval_sec=poll_interval_sec,
+            get_progress_fn=get_progress_fn,
+            unpack_job_archive=True
+        )
+
+        with open(output_done_path, "w") as f:
+            f.write(f"HPC MD simulation completed for {target_id}.\n")
+
+        if callable(globals().get("log_sim_step")):
+            log_sim_step("DONE", step_log_file, f"HPC MD pipeline finished for {target_id}.")
+
+    except Exception as err:
+        if callable(globals().get("log_sim_step")):
+            log_sim_step("ERROR", step_log_file, str(err))
+        logger.exception("Execution failed in execute_hpc_md_pipeline for %s: %s", target_id, str(err))
+        raise
+
 
 rule run_local_md:
 	input:
@@ -806,65 +915,15 @@ rule run_HPC_md:
 		gpu = 0,     # Zero local GPUs used! Passive SSH / monitoring thread only
 		mem_mb = 500
 	run:
-		# Setup Logger
-		log_path = params.log_abs
-		os.makedirs(os.path.dirname(log_path), exist_ok=True)
-
-		logger = logging.getLogger(f"run_md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}")
-		logger.setLevel(logging.INFO)
-		logger.handlers.clear()
-
-		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-		fh = logging.FileHandler(log_path, mode="a"); fh.setFormatter(fmt); logger.addHandler(fh)
-		ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
-
-		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns"
-		
-		# FIX: Standard 100ns uses standard prefix without protocol suffix
-		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
-		
-		job_dir = os.path.dirname(input.job_description)
-		local_dir = os.path.abspath(os.path.dirname(output.done))
-		step_log_file = os.path.join(job_dir, "simulation_steps.log")
-
-		clean_base = HPC_REMOTE_BASE.lstrip("~/")
-		remote_dir = os.path.join(clean_base, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
-		#job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}"
-		job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_standard_100ns"
-
-		hpc = HPCJobManager(
-			ssh_target="komondor",
-			remote_dir=remote_dir,
-			local_dir=local_dir,
-			job_name=job_name,
-			job_script=os.path.basename(input.job_description),
-			log_path=log_path,
-			logger=logger,
-			step_log_file=step_log_file,
-			hpc_user=HPC_USER,
+		execute_hpc_md_pipeline(
+			wildcards=wildcards,
+			job_description_path=input.job_description,
+			output_done_path=output.done,
+			log_path=params.log_abs,
+			protocol="standard_100ns",
+			target_subdir="./md_results_HPC/",
+			poll_interval_sec=600
 		)
-
-		try:
-			def md_progress(ssh_target, r_dir):
-				return get_remote_gromacs_progress(ssh_target, r_dir, prefix)
-
-			hpc.execute_pipeline(
-				completion_check_file=f"{prefix}.gro",
-				target_subdir="./md_results_HPC/",
-				poll_interval_sec=60,
-				get_progress_fn=md_progress,
-				unpack_job_archive=True
-			)
-
-			with open(output.done, "w") as f:
-				f.write(f"HPC MD simulation completed for {target_id}.\n")
-
-			log_sim_step("DONE", step_log_file, "HPC MD rule finished successfully.")
-
-		except Exception as err:
-			log_sim_step("ERROR", step_log_file, str(err))
-			logger.exception("Execution failed for %s: %s", target_id, str(err))
-			raise
 
 rule finalize_md:
 	input:
@@ -1098,8 +1157,8 @@ rule pbc_correction_and_extract:
 
 		# 3. Dynamic frame extraction (~500 frames target)
 		mkdir -p FRAMES
-		TOTAL_PS=$(gmx check -f md_clean.xtc 2>&1 | grep "Step" | tail -n 1 | awk '{{print int($2)}}')
-
+		#TOTAL_PS=$(gmx check -f md_clean.xtc 2>&1 | grep "Step" | tail -n 1 | awk '{{print int($2)}}')
+		TOTAL_PS=$(gmx check -f md_clean.xtc 2>&1 | grep "Last frame" | awk '{{for(i=1;i<=NF;i++) if($i=="time") print int($(i+1))}}' | tail -n 1)
 		# Fallback if total ps parsing fails
 		if [ -z "$TOTAL_PS" ] || [ "$TOTAL_PS" -eq 0 ]; then TOTAL_PS=100000; fi
 
@@ -1616,59 +1675,14 @@ rule run_custom_md_HPC:
 		gpu = 0,
 		mem_mb = 500
 	run:
-		log_path = params.log_abs
-		os.makedirs(os.path.dirname(log_path), exist_ok=True)
-
-		logger_name = f"run_custom_md_HPC_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{wildcards.protocol}"
-		logger = logging.getLogger(logger_name)
-		logger.setLevel(logging.INFO)
-		logger.handlers.clear()
-
-		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-		fh = logging.FileHandler(log_path, mode="a"); fh.setFormatter(fmt); logger.addHandler(fh)
-		ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
-
-		target_id = f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}"
-		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{wildcards.protocol}_md"
-		job_dir = os.path.dirname(input.job_description)
-		local_dir = os.path.abspath(os.path.dirname(output.done))
-		step_log_file = os.path.join(job_dir, "simulation_steps.log")
-
-		clean_base = HPC_REMOTE_BASE.lstrip("~/")
-		remote_dir = os.path.join(clean_base, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}")
-		#job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{wildcards.protocol}"
-		job_name = f"md_{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_{wildcards.protocol}"
-
-		hpc = HPCJobManager(
-			ssh_target="komondor",
-			remote_dir=remote_dir,
-			local_dir=local_dir,
-			job_name=job_name,
-			job_script=os.path.basename(input.job_description),
-			log_path=log_path,
-			logger=logger,
-			step_log_file=step_log_file,
-			hpc_user=HPC_USER,
+		execute_hpc_md_pipeline(
+			wildcards=wildcards,
+			job_description_path=input.job_description,
+			output_done_path=output.done,
+			log_path=params.log_abs,
+			target_subdir="./md_results_HPC/",
+			poll_interval_sec=900
 		)
-
-		try:
-			#def md_progress(ssh_target, r_dir):
-			#	return get_remote_gromacs_progress(ssh_target, r_dir, prefix)
-
-			hpc.execute_pipeline(
-				completion_check_file=f"{prefix}.gro",
-				target_subdir=".",
-				poll_interval_sec=900,
-				get_progress_fn=get_simulation_progress,
-				unpack_job_archive=True
-			)
-
-			with open(output.done, "w") as f:
-				f.write(f"HPC MD simulation completed for {target_id}.\n")
-
-		except Exception as err:
-			logger.exception("Execution failed in run_custom_md_HPC for %s: %s", target_id, str(err))
-			raise
 
 rule finalize_custom_md:
 	wildcard_constraints:
@@ -1722,10 +1736,11 @@ rule finalize_custom_md:
 		try:
 			protocol_dir = os.path.abspath(f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}")
 			job_dir = os.path.join(protocol_dir, "JOB")
+			hpc_results_dir = os.path.join(protocol_dir, "md_results_HPC")
 			results_dir = os.path.abspath(os.path.dirname(output.done))
 			os.makedirs(results_dir, exist_ok=True)
 
-			search_dirs = [protocol_dir, job_dir]
+			search_dirs = [protocol_dir, job_dir, hpc_results_dir]
 
 			def find_and_copy(ext):
 				target_filename = f"{prefix}{ext}"
