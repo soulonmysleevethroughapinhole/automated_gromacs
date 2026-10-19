@@ -1,6 +1,12 @@
+__pycache__/
+*.pyc
 .snakemake
 .env
 results
 data
 logs
 workflow/rules/sims_recovered.smk
+
+.pytest_cache/
+.coverage
+htmlcov/
