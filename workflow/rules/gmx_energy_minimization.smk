@@ -33,7 +33,8 @@ rule energy_minimize_structure_single:
 		mdp_st = "config/gmx_em/emw_steep_hydr.mdp",
 		mdp_cg = "config/gmx_em/emw_cg_hydr.mdp"
 	output:
-		em_structure = "results/gmx_em/{pdb}/{source}/em_{model_id}.pdb"
+		em_structure = "results/gmx_em/{pdb}/{source}/em_{model_id}.pdb",
+		em_edr = "results/gmx_em/{pdb}/{source}/em_{model_id}.edr"
 	log:
 		"logs/{pdb}/{source}/{model_id}/energy_minimize_structure.log"
 	params:
@@ -61,7 +62,7 @@ rule energy_minimize_structure_single:
 		mdp_st_abs = os.path.abspath(input.mdp_st)
 		mdp_cg_abs = os.path.abspath(input.mdp_cg)
 		output_pdb_abs = os.path.abspath(output.em_structure)
-
+		output_edr_abs = os.path.abspath(output.em_edr)  # <-- ABSOLUTE EDR PATH
 		os.makedirs(os.path.dirname(output_pdb_abs), exist_ok=True)
 
 		# Execute inside a isolated temporary folder
@@ -111,14 +112,18 @@ rule energy_minimize_structure_single:
 			#run_cmd(f"gmx mdrun -v -s cg.tpr -o cg.trr -c after_cg.gro -g cg.log -ntomp {threads}")
 			#run_cmd(f"gmx mdrun -v -s cg.tpr -o cg.trr -c after_cg.gro -g cg.log -ntmpi 1 -ntomp {threads} -nb gpu -pme gpu -bonded gpu")
 			run_cmd(f"gmx grompp -f '{mdp_cg_abs}' -c after_st.gro -r after_st.gro -o cg.tpr -p topol.top -maxwarn 2")
-			run_cmd(f"gmx mdrun -v -s cg.tpr -o cg.trr -c after_cg.gro -g cg.log -ntmpi 1 -ntomp {threads} -nb gpu -pme cpu -bonded cpu")
+			run_cmd(f"gmx mdrun -v -s cg.tpr -e cg.edr -o cg.trr -c after_cg.gro -g cg.log -ntmpi 1 -ntomp {threads} -nb gpu -pme cpu -bonded cpu")
 			
 			# 6. Extract Final Cleaned Protein Structure
 			run_cmd("gmx trjconv -s cg.tpr -f after_cg.gro -o output_ec.pdb -pbc mol -ur compact", input_text="Protein\n")
 
 			produced_pdb = os.path.join(work_dir, "output_ec.pdb")
+			produced_edr = os.path.join(work_dir, "cg.edr")
 			if not os.path.exists(produced_pdb):
 				raise FileNotFoundError(f"Expected output structure not generated: {produced_pdb}")
-
+			if not os.path.exists(produced_edr):
+				raise FileNotFoundError(f"Expected energy file not generated: {produced_edr}")
 			shutil.copy2(produced_pdb, output_pdb_abs)
+			shutil.copy2(produced_edr, output_edr_abs)
+			
 			logger.info("✅ Successfully generated energy-minimized structure: %s", output_pdb_abs)

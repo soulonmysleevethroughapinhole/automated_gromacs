@@ -30,7 +30,9 @@ protocols:
 # Target structures to pull and model
 pdbs:
   - 7UU9
-#  - 7JPY
+  - 7JPY
+  - 8A55
+  - 9UCN
   - 7KQW
   - 6WEY # for when only SA can be done // standrad cam ne supressed
   - 7KPH
@@ -81,7 +83,7 @@ custom_simulations:
           - { time_ns: 0, temp_k: 300 }
           - { time_ns: 100, temp_k: 450 }
           - { time_ns: 500, temp_k: 300 }
-    empirical_canonical_structure:
+    #empirical_canonical_structure:
       #- protocol: 'simulated-annealing_2000ns+300K@0ns&450K@200ns&300K@900ns'
       - protocol: 'simulated-annealing_2000ns'
         compute_target: "HPC"
@@ -89,7 +91,13 @@ custom_simulations:
           - { time_ns: 0, temp_k: 300 }
           - { time_ns: 400, temp_k: 450 }
           - { time_ns: 900, temp_k: 300 }
-
+      - protocol: 'extended_1us'
+        compute_target: "HPC"
+        md_to_extend: "standard_100ns"
+      - protocol: 'extended_2us'
+        compute_target: "HPC"
+        md_to_extend: 'extended_1us'
+  # are these still needed with default HPC compute target?
   7UU9:
     empirical_canonical_structure:
       - protocol: 'standard_100ns'

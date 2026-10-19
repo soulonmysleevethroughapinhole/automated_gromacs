@@ -658,9 +658,9 @@ def get_simulation_progress(ssh_target: str, remote_dir: str) -> str | None:
 	"""Helper to parse the latest step/time progress from remote md.log or slurm .out files."""
 	cmd = (
 		f"ssh -o BatchMode=yes {ssh_target} "
-        r'"for f in ' f"'{remote_dir}'" r"/*.log '" f"{remote_dir}" r"'/*.out '" f"{remote_dir}" r"'/JOB/*.log '" f"{remote_dir}" r"'/JOB/*.out; do "
-        r'[ -f "$f" ] && tail -n 30 "$f" | grep -E "Step|Time|Vol|ETA" | tail -n 1; '
-        r'done | tail -n 1"'
+		r'"for f in ' f"'{remote_dir}'" r"/*.log '" f"{remote_dir}" r"'/*.out '" f"{remote_dir}" r"'/JOB/*.log '" f"{remote_dir}" r"'/JOB/*.out; do "
+		r'[ -f "$f" ] && tail -n 30 "$f" | grep -E "Step|Time|Vol|ETA" | tail -n 1; '
+		r'done | tail -n 1"'
 	)
 	try:
 		res = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=10)
@@ -707,90 +707,112 @@ def get_remote_gromacs_progress(
 		return None
 
 def execute_hpc_md_pipeline(
-    wildcards,
-    job_description_path,
-    output_done_path,
-    log_path,
-    protocol=None,
-    target_subdir="./md_results_HPC/",
-    poll_interval_sec=300,
-    get_progress_fn=None
+	wildcards,
+	job_description_path,
+	output_done_path,
+	log_path,
+	protocol=None,
+	target_subdir="./md_results_HPC/",
+	poll_interval_sec=300,
+	get_progress_fn=None
 ):
-    """
-    Unified execution handler for standard and custom HPC MD simulations.
-    """
-    pdb = wildcards.pdb
-    source = wildcards.source
-    model_id = wildcards.model_id
-    protocol = protocol or getattr(wildcards, "protocol", "standard_100ns")
+	"""
+	Unified execution handler for standard and custom HPC MD simulations.
+	"""
+	pdb = wildcards.pdb
+	source = wildcards.source
+	model_id = wildcards.model_id
+	protocol = protocol or getattr(wildcards, "protocol", "standard_100ns")
 
-    # Setup isolated logging directory and handler
-    os.makedirs(os.path.dirname(log_path), exist_ok=True)
+	# Setup isolated logging directory and handler
+	os.makedirs(os.path.dirname(log_path), exist_ok=True)
 
-    logger_name = f"run_hpc_md_{pdb}_{source}_{model_id}_{protocol}"
-    logger = logging.getLogger(logger_name)
-    logger.setLevel(logging.INFO)
-    logger.handlers.clear()
+	logger_name = f"run_hpc_md_{pdb}_{source}_{model_id}_{protocol}"
+	logger = logging.getLogger(logger_name)
+	logger.setLevel(logging.INFO)
+	logger.handlers.clear()
 
-    fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
-    fh = logging.FileHandler(log_path, mode="a"); fh.setFormatter(fmt); logger.addHandler(fh)
-    ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
+	fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
+	fh = logging.FileHandler(log_path, mode="a"); fh.setFormatter(fmt); logger.addHandler(fh)
+	ch = logging.StreamHandler(); ch.setFormatter(fmt); logger.addHandler(ch)
 
-    target_id = f"{pdb}/{source}/{model_id}/{protocol}"
-    
-    # Prefix determination based on protocol
-    if protocol == "standard_100ns":
-        prefix = f"{pdb}_{source}_{model_id}_md"
-    else:
-        prefix = f"{pdb}_{source}_{model_id}_{protocol}_md"
+	target_id = f"{pdb}/{source}/{model_id}/{protocol}"
+	
+	# Prefix determination based on protocol
+	if protocol == "standard_100ns":
+		prefix = f"{pdb}_{source}_{model_id}_md"
+	else:
+		prefix = f"{pdb}_{source}_{model_id}_{protocol}_md"
 
-    job_dir = os.path.dirname(job_description_path)
-    local_dir = os.path.abspath(os.path.dirname(output_done_path))
-    step_log_file = os.path.join(job_dir, "simulation_steps.log")
+	job_dir = os.path.dirname(job_description_path)
+	local_dir = os.path.abspath(os.path.dirname(output_done_path))
+	step_log_file = os.path.join(job_dir, "simulation_steps.log")
 
-    clean_base = HPC_REMOTE_BASE.lstrip("~/")
-    remote_dir = os.path.join(clean_base, pdb, source, model_id, protocol)
-    job_name = f"md_{pdb}_{source}_{model_id}_{protocol}"
+	#clean_base = HPC_REMOTE_BASE.lstrip("~/")
+	#if HPC_REMOTE_BASE.startswith("~"):
+	#	# Expand user path for remote HPC user if needed
+	#	clean_base = HPC_REMOTE_BASE.replace("~", f"/home/{HPC_USER}")
+	#elif not HPC_REMOTE_BASE.startswith("/"):
+	#	clean_base = "/" + HPC_REMOTE_BASE
+	#else:
+	#	clean_base = HPC_REMOTE_BASE
+		
+	#remote_dir = os.path.join(clean_base, pdb, source, model_id, protocol)
+	#remote_dir = f'{clean_base}/{pdb}/{source}/{model_id}/{protocol}'
 
-    hpc = HPCJobManager(
-        ssh_target="komondor",
-        remote_dir=remote_dir,
-        local_dir=local_dir,
-        job_name=job_name,
-        job_script=os.path.basename(job_description_path),
-        log_path=log_path,
-        logger=logger,
-        step_log_file=step_log_file,
-        hpc_user=HPC_USER,
-    )
 
-    try:
-        # Fallback to standard progress tracker if custom function is not passed
-        if get_progress_fn is None:
-            if callable(globals().get("get_remote_gromacs_progress")):
-                get_progress_fn = lambda ssh_tgt, r_dir, j_id=None: get_remote_gromacs_progress(ssh_tgt, r_dir, prefix)
-            else:
-                get_progress_fn = get_simulation_progress
+	# why this much heartache
+	#job_name = f"md_{pdb}_{source}_{model_id}_{protocol}"
+	#job_name = os.path.basename(job_description_path)
+	# Ensure HPC_REMOTE_BASE retains its exact leading structure
+	#if HPC_REMOTE_BASE.startswith("~"):
+	#	remote_dir = os.path.expanduser(os.path.join(HPC_REMOTE_BASE, pdb, source, model_id, protocol))
+	#else:
+	#	# Guarantee single leading slash without dropping root paths
+	#	base_path = "/" + HPC_REMOTE_BASE.lstrip("/")
+	#	remote_dir = os.path.join(base_path, pdb, source, model_id, protocol)
+	remote_dir = os.path.join(HPC_REMOTE_BASE, pdb, source, model_id, protocol)
+	job_name = f"md_{pdb}_{source}_{model_id}_{protocol}"
 
-        hpc.execute_pipeline(
-            completion_check_file=f"{prefix}.gro",
-            target_subdir=target_subdir,
-            poll_interval_sec=poll_interval_sec,
-            get_progress_fn=get_progress_fn,
-            unpack_job_archive=True
-        )
+	hpc = HPCJobManager(
+		ssh_target="komondor",
+		remote_dir=remote_dir,
+		local_dir=local_dir,
+		job_name=job_name,
+		job_script=os.path.basename(job_description_path),
+		log_path=log_path,
+		logger=logger,
+		step_log_file=step_log_file,
+		hpc_user=HPC_USER,
+	)
 
-        with open(output_done_path, "w") as f:
-            f.write(f"HPC MD simulation completed for {target_id}.\n")
+	try:
+		# Fallback to standard progress tracker if custom function is not passed
+		if get_progress_fn is None:
+			if callable(globals().get("get_remote_gromacs_progress")):
+				get_progress_fn = lambda ssh_tgt, r_dir, j_id=None: get_remote_gromacs_progress(ssh_tgt, r_dir, prefix)
+			else:
+				get_progress_fn = get_simulation_progress
 
-        if callable(globals().get("log_sim_step")):
-            log_sim_step("DONE", step_log_file, f"HPC MD pipeline finished for {target_id}.")
+		hpc.execute_pipeline(
+			completion_check_file=f"{prefix}.gro",
+			target_subdir=target_subdir,
+			poll_interval_sec=poll_interval_sec,
+			get_progress_fn=get_progress_fn,
+			unpack_job_archive=True
+		)
 
-    except Exception as err:
-        if callable(globals().get("log_sim_step")):
-            log_sim_step("ERROR", step_log_file, str(err))
-        logger.exception("Execution failed in execute_hpc_md_pipeline for %s: %s", target_id, str(err))
-        raise
+		with open(output_done_path, "w") as f:
+			f.write(f"HPC MD simulation completed for {target_id}.\n")
+
+		if callable(globals().get("log_sim_step")):
+			log_sim_step("DONE", step_log_file, f"HPC MD pipeline finished for {target_id}.")
+
+	except Exception as err:
+		if callable(globals().get("log_sim_step")):
+			log_sim_step("ERROR", step_log_file, str(err))
+		logger.exception("Execution failed in execute_hpc_md_pipeline for %s: %s", target_id, str(err))
+		raise
 
 
 rule run_local_md:
@@ -932,7 +954,8 @@ rule finalize_md:
 		done = "results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/md_completed.txt",
 		xtc_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.xtc"),
 		tpr_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.tpr"),
-		cpt_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.cpt")  # <-- CRITICAL FOR DAG RESOLUTION
+		cpt_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.cpt"),
+		edr_md = protected("results/gromacs/{pdb}/{source}/{model_id}/standard_100ns/md_results/{pdb}_{source}_{model_id}_md.edr"),
 	log:
 		"logs/{pdb}/{source}/{model_id}/finalize_md.log"
 	params:
@@ -945,7 +968,10 @@ rule finalize_md:
 		# ------------------------------------------------------------------
 		out_dir = os.path.abspath(os.path.dirname(output.done))
 
-		if os.path.exists(output.done) and os.path.exists(output.xtc_md) and os.path.exists(output.tpr_md):
+		if (os.path.exists(output.done) and 
+			os.path.exists(output.xtc_md) and 
+			os.path.exists(output.tpr_md) and 
+			os.path.exists(output.edr_md)):
 			print(f"Target {wildcards.pdb}/{wildcards.source}/{wildcards.model_id} already finalized locally. Skipping HPC pull.")
 			return
 
@@ -1004,7 +1030,6 @@ rule finalize_md:
 					logger.info("Cleaned up staging folder: %s", hpc_staging_dir)
 				else:
 					logger.warning("HPC staging directory %s does not exist. Checking protocol root for fallback files...", hpc_staging_dir)
-					# Fallback: Move matching files directly from protocol_dir if they were downloaded at protocol root
 					for ext in [".xtc", ".tpr", ".cpt", ".gro", ".edr", ".log"]:
 						src = os.path.join(protocol_dir, f"{prefix}{ext}")
 						dst = os.path.join(out_dir, f"{prefix}{ext}")
@@ -1012,11 +1037,16 @@ rule finalize_md:
 							shutil.move(src, dst)
 							logger.info("Moved fallback file from protocol root: %s -> %s", src, dst)
 
-				# Fallback check for generic 'md.xtc' naming
+				# Fallback renames for generic 'md.*' naming
 				generic_xtc = os.path.join(out_dir, "md.xtc")
 				if not os.path.exists(output.xtc_md) and os.path.exists(generic_xtc):
 					os.rename(generic_xtc, output.xtc_md)
 					logger.info("Renamed generic 'md.xtc' to expected '%s'", output.xtc_md)
+
+				generic_edr = os.path.join(out_dir, "md.edr")
+				if not os.path.exists(output.edr_md) and os.path.exists(generic_edr):
+					os.rename(generic_edr, output.edr_md)
+					logger.info("Renamed generic 'md.edr' to expected '%s'", output.edr_md)
 
 				# Fallback copy for .tpr from local JOB folder if missing
 				local_tpr_src = os.path.join(job_dir, f"{prefix}.tpr")
@@ -1032,6 +1062,11 @@ rule finalize_md:
 
 				if not os.path.exists(output.tpr_md):
 					err_msg = f"HPC execution finished, but {output.tpr_md} is missing from {out_dir}!"
+					logger.error(err_msg)
+					raise FileNotFoundError(err_msg)
+
+				if not os.path.exists(output.edr_md):
+					err_msg = f"HPC execution finished, but {output.edr_md} is missing from {out_dir}!"
 					logger.error(err_msg)
 					raise FileNotFoundError(err_msg)
 
@@ -1079,8 +1114,13 @@ rule finalize_md:
 					os.rename(generic_xtc, output.xtc_md)
 					logger.info("Renamed generic 'md.xtc' to '%s'", output.xtc_md)
 
-				if not os.path.exists(output.xtc_md) or not os.path.exists(output.tpr_md):
-					err_msg = f"Local MD completed, but missing expected outputs (.xtc / .tpr) in {out_dir}"
+				generic_edr = os.path.join(out_dir, "md.edr")
+				if not os.path.exists(output.edr_md) and os.path.exists(generic_edr):
+					os.rename(generic_edr, output.edr_md)
+					logger.info("Renamed generic 'md.edr' to '%s'", output.edr_md)
+
+				if not os.path.exists(output.xtc_md) or not os.path.exists(output.tpr_md) or not os.path.exists(output.edr_md):
+					err_msg = f"Local MD completed, but missing expected outputs (.xtc / .tpr / .edr) in {out_dir}"
 					logger.error(err_msg)
 					raise FileNotFoundError(err_msg)
 
@@ -1095,7 +1135,6 @@ rule finalize_md:
 		except Exception as err:
 			logger.exception("Finalization failed for target %s: %s", target_id, str(err))
 			raise
-
 
 
 # --- STEP 6: TRAJECTORY CLEANING & PBC WRAPPING CORRECTION ---
@@ -1680,6 +1719,7 @@ rule run_custom_md_HPC:
 			job_description_path=input.job_description,
 			output_done_path=output.done,
 			log_path=params.log_abs,
+			protocol=wildcards.protocol,
 			target_subdir="./md_results_HPC/",
 			poll_interval_sec=900
 		)
@@ -1695,7 +1735,8 @@ rule finalize_custom_md:
 		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
 		xtc_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.xtc"),
 		tpr_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.tpr"),
-		cpt_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.cpt")  # <-- REQUIRED FOR MULTI-STAGE EXTENSIONS
+		cpt_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.cpt"),  # <-- REQUIRED FOR MULTI-STAGE EXTENSIONS
+		edr_md = protected("results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/{pdb}_{source}_{model_id}_{protocol}_md.edr"),
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/finalize_custom_md.log"
 	params:
@@ -1757,9 +1798,11 @@ rule finalize_custom_md:
 			# Copy mandatory files
 			copied_xtc = find_and_copy(".xtc")
 			copied_tpr = find_and_copy(".tpr")
+			copied_cpt = find_and_copy(".cpt")
+			copied_edr = find_and_copy(".edr")
 
 			# Copy auxiliary files if available (.gro, .cpt, .edr, .log)
-			for ext in [".gro", ".cpt", ".edr", ".log"]:
+			for ext in [".gro", ".log"]:
 				find_and_copy(ext)
 
 			if not copied_xtc or not os.path.exists(output.xtc_md):

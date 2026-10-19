@@ -12,5 +12,5 @@ rule calculate_rmsd:
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/calculate_rmsd.log"
 	shell:
-		"python scripts/smk/pymol/calculate_rmsd_to_ref.py {input.tar} {input.reference_structure} {output.rmsd} > {log} 2>&1"
+		"python scripts/smk/pymol/calculate_rmsd_to_ref.py {input.tar} {input.reference_structure} {output.rmsd} {wildcards.protocol} > {log} 2>&1"
 

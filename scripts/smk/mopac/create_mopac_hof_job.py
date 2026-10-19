@@ -39,7 +39,7 @@ def generate_mopac_slurm_job(job_output_path, prefix, total_frames):
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
 #SBATCH --array=0-{max_array_index}%32
-#SBATCH --time="00:15:00"
+#SBATCH --time="02:15:01"
 #SBATCH --no-requeue
 
 # Load MOPAC module

@@ -1,0 +1,1 @@
+# NOTE: this layer will visualize the digested data from mopac and gmx (after trj_analysis.smk)
