@@ -83,8 +83,6 @@ custom_simulations:
           - { time_ns: 0, temp_k: 300 }
           - { time_ns: 100, temp_k: 450 }
           - { time_ns: 500, temp_k: 300 }
-    #empirical_canonical_structure:
-      #- protocol: 'simulated-annealing_2000ns+300K@0ns&450K@200ns&300K@900ns'
       - protocol: 'simulated-annealing_2000ns'
         compute_target: "HPC"
         temperature_schedule:
