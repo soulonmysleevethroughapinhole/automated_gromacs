@@ -26,60 +26,44 @@ def resolve_targets(pdb, source, model):
 
 	# Default behavior: If no custom jobs requested, queue standard 100ns baseline
 	if not custom_jobs:
-		#return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/md_completed.txt"]
-		#return [f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"]
-		#return [f"results/movies/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"]
-		#return [f"results/movies/{pdb}/{source}/{model}/standard_100ns_md_trajectory.mov"]
-		#return [f"results/gmx_em/{pdb}/{source}/{model}/standard_100ns/em_results/em_completed.txt"]
-		#return [f'results/mopac/{pdb}/{source}/{model}/standard_100ns/frames/heat_of_formation.csv']
-		return [f'results/analysis/plots/{pdb}/{source}/{model}/standard_100ns/analysis_complete.txt']
+		protocols = ['standard_100ns']
+	else:
+		protocols = [job["protocol"] for job in custom_jobs if "protocol" in job]
+
+		#return [f'results/analysis/plots/{pdb}/{source}/{model}/standard_100ns/analysis_complete.txt']
 	
 	job_paths = []
-	for job in custom_jobs:
-		#protocol = job.get("protocol", "standard)
-		#protocol = job.get("protocol", None)
-		#protocol = job["protocol"]
-		protocol = job["protocol"]
-		protocol_stem = protocol.split("_")[0]  # Extract the base protocol name (e.g., "extended" from "extended_1000ns")
-		stage = protocol.split("_")[1] if "_" in protocol else None  # Extract the stage (e.g., "1000ns" from "extended_1000ns")
+	for protocol in protocols:
+		base_path = f"results/gromacs/{pdb}/{source}/{model}/{protocol}"
 
-		path=None
-		
-		if protocol_stem in ["extended", 'simulated-annealing', 'standard']:
-			path = f'results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt'
-			#length = job.get("target_ns", 1000)
-			#path = f"results/md/{pdb}/{source}/{model}/extended_{length}ns/md_results/md_completed.txt"
-			#path = f"results/md/{pdb}/{source}/{model}/{protocol}_{length}ns/md_results/frames/FRAMES_compressed.tar.gz"
-			#path = f"results/md/{pdb}/{source}/{model}/{protocol}_{length}ns/md_results/frames/FRAMES_compressed.tar.gz"
-			#path = f"results/movies/{pdb}/{source}/{model}/{full_protocol}_md_trajectory.mov"
-			#path = f"results/gmx_em/{pdb}/{source}/{model}/{full_protocol}/em_results/em_completed.txt"
+		scheduling_marker = f"{base_path}/JOB/scheduling.yml"
+		completed_marker  = f"{base_path}/md_results/md_completed.txt"
+		#completed_marker = f"results/gromacs/{pdb}/{source}/{model}/{protocol}/md_results/md_completed.txt"
 
-		#elif protocol == "simulated_annealing-500-200":
-		#elif protocol == "simulated-annealing":
-		#	#path = f"results/md/{pdb}/{source}/{model}/simulated_annealing/md_results/md_completed.txt"
-		#	#path = f"results/md/{pdb}/{source}/{model}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
-		#	#path = f"results/md/{pdb}/{source}/{model}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
-		#	path = f"results/movies/{pdb}/{source}/{model}/{protocol}_md_trajectory.mov"
-		#	path = f"results/gmx_em/{pdb}/{source}/{model}/{protocol}/em_results/em_completed.txt"
-		#	path = f'results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt'
-#
-		#elif protocol == "standard":  # "standard"
-		##elif protocol == "standard":  # "standard"
-		#	#path = f"results/md/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
-		#	#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_completed.txt"
-#
-		#	#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/md_completed.txt"
-		#	#path = f"results/gromacs/{pdb}/{source}/{model}/standard_100ns/md_results/frames/FRAMES_compressed.tar.gz"
-		#	path = f"results/movies/{pdb}/{source}/{model}/{full_protocol}_md_trajectory.mov"
-		#	path = f"results/gmx_em/{pdb}/{source}/{model}/{full_protocol}_100ns/em_results/em_completed.txt"
-		#	path = f'results/mopac/{pdb}/{source}/{model}/{full_protocol}_100ns/frames/heat_of_formation.csv'
-		#	path = f'results/analysis/plots/{pdb}/{source}/{model}/{full_protocol}/analysis_complete.txt'
-		
-		if path != None:
-			job_paths.append(path)
-		
+		analysis_marker = f"results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt"
 
-	print(job_paths)
+		# ONLY queue analysis targets if the trajectory has finished on HPC and synced locally
+		if os.path.exists(completed_marker):
+			job_paths.append(analysis_marker)
+			#	f"results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt"
+			#)
+		elif os.path.exists(scheduling_marker):
+			job_paths.append(scheduling_marker) #KEEPS SNAKEMAKE IDLE
+		else:
+			job_paths.append(scheduling_marker)
+	#for job in custom_jobs:
+	#	protocol = job["protocol"]
+	#	protocol_stem = protocol.split("_")[0]  # Extract the base protocol name (e.g., "extended" from "extended_1000ns")
+	#	stage = protocol.split("_")[1] if "_" in protocol else None  # Extract the stage (e.g., "1000ns" from "extended_1000ns")
+	#
+	#	path=None
+	#	
+	#	if protocol_stem in ["extended", 'simulated-annealing', 'standard']:
+	#		path = f'results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt'
+	#
+	#	if path != None:
+	#		job_paths.append(path)
+
 	return job_paths
 	
 # DYNAMIC ROUTING FUNCTION
@@ -101,19 +85,20 @@ def get_final_targets(wildcards):
 			checkpoint_dir = checkpoints.evaluate_predictions.get(pdb=pdb, source=source).output.eval_dir
 			
 			# 3. Inspect JSON files to filter out "too_similar" models
-			for json_file in os.listdir(checkpoint_dir):
-				if json_file.endswith(".json"):
-					with open(os.path.join(checkpoint_dir, json_file)) as f:
-						eval_data = json.load(f)
-					
-					model_id = eval_data["model"] # e.g., "model_1"
-					target_key = f"{source}_{model_id}"
+			if os.path.exists(checkpoint_dir):
+				for json_file in os.listdir(checkpoint_dir):
+					if json_file.endswith(".json"):
+						with open(os.path.join(checkpoint_dir, json_file)) as f:
+							eval_data = json.load(f)
 
-					is_divergent = (eval_data.get("structural_evaluation") == "divergent")						
-					has_explicit_override = target_key in config.get("custom_simulations", {}).get(pdb, {})
+						model_id = eval_data["model"] # e.g., "model_1"
+						target_key = f"{source}_{model_id}"
 
-					if has_explicit_override or is_divergent:
-						targets.extend(resolve_targets(pdb, source, model_id))
+						is_divergent = (eval_data.get("structural_evaluation") == "divergent")						
+						has_explicit_override = target_key in config.get("custom_simulations", {}).get(pdb, {})
+
+						if has_explicit_override or is_divergent:
+							targets.extend(resolve_targets(pdb, source, model_id))
 
 						# Add MD targets only for compliant models
 						#targets.append(f"results/gromacs/{pdb}/{source}/{model_spec}/md/md_completed.txt")

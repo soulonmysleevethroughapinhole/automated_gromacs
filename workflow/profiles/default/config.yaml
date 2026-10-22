@@ -1,0 +1,5 @@
+# workflow/profiles/default/config.yaml
+rerun-triggers:
+  - mtime
+  - input
+  - params

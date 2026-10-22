@@ -71,7 +71,7 @@ import subprocess
 # rule 1: GET the empirical pdb from rcsb
 rule get_empirical_structure:
 	output:
-		cif_file = 'results/structures/{pdb}/empirical/native.cif'
+		cif_file = protected('results/structures/{pdb}/empirical/native.cif')
 	log:
 		'logs/{pdb}/rcsb_download.log'
 	run:
@@ -108,7 +108,7 @@ rule extract_cif_data:
 		'logs/{pdb}/extract_cif_data.log'
 	shell:
 		#"python scripts/extract_cif_data.py -i {input.cif_file} -s {output.seq_file} -m {output.metadata} > {log} 2>&1"
-		"python scripts/extract_cif_data.py -i {input.cif_file} -m {output.metadata} > {log} 2>&1"
+		"python scripts/smk/structure_prep/extract_cif_data.py -i {input.cif_file} -m {output.metadata} > {log} 2>&1"
 
 #rule reconstruct_sequence:
 #	input:
@@ -130,9 +130,9 @@ rule convert_cif_to_pdb:
 	log:
 		'logs/{pdb}/convert_cif_to_pdb.log'
 	shell:
-	   "python scripts/convert_cif_to_pdb.py --input {input.cif_file} --output {output.pdb_file} > {log} 2>&1"
+	   "python scripts/smk/structure_prep/convert_cif_to_pdb.py --input {input.cif_file} --output {output.pdb_file} > {log} 2>&1"
 
-# rule 1.875: reconstruct sequence from cif and metadata
+# rule 1.875: reconstruct canonical sequence from cif and metadata
 rule reconstruct_sequence:
 	input:
 		cif = 'results/structures/{pdb}/empirical/native.cif',
@@ -143,7 +143,7 @@ rule reconstruct_sequence:
 	log:
 		'logs/{pdb}/reconstruct_sequence.log'
 	shell:
-		"python scripts/reconstruct_sequence.py "
+		"python scripts/smk/structure_prep/reconstruct_sequence.py "
 		"--input {input.cif} "
 		"--metadata {input.metadata} "
 		"--output {output.canonical_seq} "
@@ -159,7 +159,7 @@ rule clean_pdb_structure:
 	log:
 		'logs/{pdb}/clean_structure.log'
 	shell:
-		"python scripts/clean_structure.py "
+		"python scripts/smk/structure_prep/clean_structure.py "
 		"--input {input.cif_file} "
 		"--sequence {input.canonical_seq} "
 		"--residue-table {input.residue_table} "
@@ -522,7 +522,7 @@ rule extract_organize_models:
 			elif orig_name.lower().endswith('.cif'):
 				# convert CIF -> PDB using existing conversion script
 				subprocess.check_call([
-					"python", "scripts/convert_cif_to_pdb.py",
+					"python", "scripts/smk/structure_prep/convert_cif_to_pdb.py",
 					"--input", src_path,
 					"--output", target_path
 				])
@@ -636,11 +636,11 @@ checkpoint evaluate_predictions:
 	output:
 		eval_dir = directory("results/structures/{pdb}/{source}/evaluations")
 	run:
-		# delegate batch RMSD evaluation to scripts/screen_rmsd.py
+		# delegate batch RMSD evaluation to scripts/smk/structure_prep/screen_rmsd.py
 		os.makedirs(output.eval_dir, exist_ok=True)
 
 		cmd = [
-			"python", "scripts/screen_rmsd.py",
+			"python", "scripts/smk/structure_prep/screen_rmsd.py",
 			"--input-emp", input.clean_empirical,
 			"--output-dir", output.eval_dir,
 			"--threshold", str(config.get("rmsd_min_threshold", 1.0))

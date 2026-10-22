@@ -75,6 +75,23 @@ custom_simulations:
       - protocol: 'extended_10us'
         compute_target: "HPC"
         md_to_extend: 'extended_1us'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+    alphafold_model_1:
+      - protocol: 'standard_100ns'
+        compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
   7KPH:
     empirical_canonical_structure:
       - protocol: 'simulated-annealing_1000ns_gyorsfűtés'
@@ -83,6 +100,13 @@ custom_simulations:
           - { time_ns: 0, temp_k: 300 }
           - { time_ns: 100, temp_k: 450 }
           - { time_ns: 500, temp_k: 300 }
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
       - protocol: 'simulated-annealing_2000ns'
         compute_target: "HPC"
         temperature_schedule:
@@ -95,30 +119,111 @@ custom_simulations:
       - protocol: 'extended_2us'
         compute_target: "HPC"
         md_to_extend: 'extended_1us'
-  # are these still needed with default HPC compute target?
+    alphafold_model_1:
+      - protocol: 'standard_100ns'
+        compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
   7UU9:
     empirical_canonical_structure:
       - protocol: 'standard_100ns'
         compute_target: "HPC"
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+
+    alphafold_model_1:
+      - protocol: 'standard_100ns'
+        compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+
   7KQW:
     empirical_canonical_structure:
       - protocol: 'standard_100ns'
         compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+
+    alphafold_model_1:
+      - protocol: 'standard_100ns'
+        compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
     colabfold_model_1:
       - protocol: 'standard_100ns'
         compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
     colabfold_model_2:
       - protocol: 'standard_100ns'
         compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
     colabfold_model_3:
       - protocol: 'standard_100ns'
         compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
     colabfold_model_4:
       - protocol: 'standard_100ns'
         compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
     colabfold_model_5:
       - protocol: 'standard_100ns'
         compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
 
 
 #      - protocol: "simulated_annealing"

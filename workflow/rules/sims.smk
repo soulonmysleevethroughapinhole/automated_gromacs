@@ -237,7 +237,7 @@ if [ -f "parent.cpt" ] && [ -f "parent.tpr" ] && [ ! -f "{deffnm}.cpt" ]; then
 	gmx_mpi convert-tpr -s "parent.tpr" -until {until_ps} -o "{deffnm}.tpr"	
 	echo "--> Starting extended run from previous checkpoint..."
 	srun --nodes=2 \\
-		--ntasks-per-node=32 \\
+		--ntasks-per-node=16 \\
 		--cpus-per-task=8 \\
 		--cpu-bind=cores \\
 		gmx_mpi mdrun -v -deffnm "{deffnm}" \\
@@ -1143,6 +1143,9 @@ def get_pbc_correction_input_deps(wildcards):
 	protocol = wildcards.protocol
 	base_path = f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{protocol}/md_results"
 
+	#print(protocol)
+	#print(base_path)
+
 	if protocol == "standard_100ns":
 		prefix = f"{wildcards.pdb}_{wildcards.source}_{wildcards.model_id}_md"
 	else:
@@ -1188,11 +1191,19 @@ rule pbc_correction_and_extract:
 
 		# 2. Fit rotational/translational drift (Two distinct newline inputs)
 		
-		printf "Protein\\nProtein\\nProtein\\n" | gmx trjconv \
-			-f md_whole.xtc \
-			-s $(basename {input.tpr_md}) \
-			-o md_clean.xtc \
-			-center -fit rot+trans >> "$LOG_ABS" 2>&1
+		# 2a. Center protein in box (2 inputs: Centering group, Output group)
+		printf "Protein\nProtein\n" | gmx trjconv \
+		    -f md_whole.xtc \
+		    -s $(basename {input.tpr_md}) \
+		    -o md_centered.xtc \
+		    -center >> "$LOG_ABS" 2>&1
+
+		# 2b. Fit rotational and translational drift (2 inputs: Fit group, Output group)
+		printf "Protein\nProtein\n" | gmx trjconv \
+		    -f md_centered.xtc \
+		    -s $(basename {input.tpr_md}) \
+		    -o md_clean.xtc \
+		    -fit rot+trans >> "$LOG_ABS" 2>&1
 
 		# 3. Dynamic frame extraction (~500 frames target)
 		mkdir -p FRAMES
@@ -1220,16 +1231,6 @@ rule pbc_correction_and_extract:
 		rm -rf FRAMES
 		"""
 
-# --- STEP 7: AUTOMATED PYMOL MOVIE GENERATION ---
-rule generate_pymol_movie:
-	input:
-		tar = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/frames/FRAMES_compressed.tar.gz"
-	output:
-		movie = "results/movies/{pdb}/{source}/{model_id}/{protocol}_md_trajectory.mov"
-	log:
-		"logs/{pdb}/{source}/{model_id}/{protocol}/pymol_render.log"
-	shell:
-		"python scripts/render_pymol_movie.py {input.tar} {output.movie} > {log} 2>&1"
 
 
 

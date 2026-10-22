@@ -3,10 +3,7 @@ import sys
 import os
 import re
 import glob
-import tarfile
-import tempfile
 import pandas as pd
-from pathlib import Path
 
 # Initialize PyMOL in headless/quiet mode before importing cmd
 import pymol
@@ -20,9 +17,11 @@ def extract_frame_num(filename: str) -> int:
     return int(match.group(0)) if match else -1
 
 
-def calculate_rmsd_pymol(tar_path: str, ref_pdb_path: str, output_csv: str, length_ns: float):
-    if not os.path.exists(tar_path):
-        raise FileNotFoundError(f"Input frame tar archive not found: {tar_path}")
+def calculate_rmsd_pymol(frame_dir: str, ref_pdb_path: str, output_csv: str, length_ns: float):
+    if not os.path.exists(frame_dir):
+        raise FileNotFoundError(f"Input frame directory not found: {frame_dir}")
+    if not os.path.isdir(frame_dir):
+        raise NotADirectoryError(f"Provided path is not a directory: {frame_dir}")
     if not os.path.exists(ref_pdb_path):
         raise FileNotFoundError(f"Reference canonical PDB structure not found: {ref_pdb_path}")
 
@@ -35,53 +34,44 @@ def calculate_rmsd_pymol(tar_path: str, ref_pdb_path: str, output_csv: str, leng
     ref_obj = "reference_structure"
     cmd.load(ref_pdb_path, object=ref_obj)
 
+    # Locate frame PDBs (supports nested folder structures inside frame_dir)
+    frame_pdbs = sorted(
+        glob.glob(os.path.join(frame_dir, "**", "*.pdb"), recursive=True),
+        key=extract_frame_num
+    )
+
+    if not frame_pdbs:
+        raise FileNotFoundError(f"No PDB frames found inside directory: {frame_dir}")
+
+    print(f"Loaded {len(frame_pdbs)} frames from {frame_dir} for RMSD calculation against {ref_pdb_path}")
+
     data_rms = []
 
-    with tempfile.TemporaryDirectory() as temp_dir:
-        # Extract frame archive safely (with Python 3.12+ filter fallback)
-        with tarfile.open(tar_path, "r:gz") as tar:
-            try:
-                tar.extractall(path=temp_dir, filter='data')
-            except TypeError:
-                # Fallback for Python < 3.12
-                tar.extractall(path=temp_dir)
+    for pdb_path in frame_pdbs:
+        frame_num = extract_frame_num(pdb_path)
+        if frame_num < 0:
+            continue
 
-        # Locate frame PDBs (supports nested EM_FRAMES folder structure)
-        frame_pdbs = sorted(
-            glob.glob(os.path.join(temp_dir, "**", "*.pdb"), recursive=True),
-            key=extract_frame_num
-        )
+        frame_obj = f"frame_{frame_num}"
+        cmd.load(pdb_path, object=frame_obj)
 
-        if not frame_pdbs:
-            raise FileNotFoundError(f"No PDB frames found inside {tar_path}")
+        # 1. C-alpha RMSD (standard structural drift metric)
+        ca_rms = cmd.align(f"{frame_obj} and name CA", f"{ref_obj} and name CA")[0]
 
-        print(f"Loaded {len(frame_pdbs)} frames from {tar_path} for RMSD calculation against {ref_pdb_path}")
+        # 2. Backbone RMSD (C, CA, N, O)
+        bb_rms = cmd.align(f"{frame_obj} and name C+CA+N+O", f"{ref_obj} and name C+CA+N+O")[0]
 
-        for pdb_path in frame_pdbs:
-            frame_num = extract_frame_num(pdb_path)
-            if frame_num < 0:
-                continue
+        # 3. All Heavy Atoms RMSD (non-hydrogen)
+        heavy_rms = cmd.align(f"{frame_obj} and not elem H", f"{ref_obj} and not elem H")[0]
 
-            frame_obj = f"frame_{frame_num}"
-            cmd.load(pdb_path, object=frame_obj)
+        data_rms.append({
+            "frame": frame_num,
+            "rmsd_ca_A": round(ca_rms, 4),
+            "rmsd_bb_A": round(bb_rms, 4),
+            "rmsd_heavy_A": round(heavy_rms, 4)
+        })
 
-            # 1. C-alpha RMSD (standard structural drift metric)
-            ca_rms = cmd.align(f"{frame_obj} and name CA", f"{ref_obj} and name CA")[0]
-
-            # 2. Backbone RMSD (C, CA, N, O)
-            bb_rms = cmd.align(f"{frame_obj} and name C+CA+N+O", f"{ref_obj} and name C+CA+N+O")[0]
-
-            # 3. All Heavy Atoms RMSD (non-hydrogen)
-            heavy_rms = cmd.align(f"{frame_obj} and not elem H", f"{ref_obj} and not elem H")[0]
-
-            data_rms.append({
-                "frame": frame_num,
-                "rmsd_ca_A": round(ca_rms, 4),
-                "rmsd_bb_A": round(bb_rms, 4),
-                "rmsd_heavy_A": round(heavy_rms, 4)
-            })
-
-            cmd.delete(frame_obj)
+        cmd.delete(frame_obj)
 
     cmd.delete(ref_obj)
 
@@ -127,19 +117,18 @@ def parse_length_ns(full_protocol: str) -> float:
 
 
 def main():
-    # Fixed: Changed < 4 to < 5 since we now require full_protocol as the 4th argument (index 4)
     if len(sys.argv) < 5:
-        print("Usage: python calculate_rmsd.py <em_frames_tar> <canonical_pdb> <output_csv> <full_protocol>")
+        print("Usage: python calculate_rmsd.py <frame_dir> <canonical_pdb> <output_csv> <full_protocol>")
         sys.exit(1)
 
-    tar_path = sys.argv[1]
+    frame_dir = sys.argv[1]
     ref_pdb_path = sys.argv[2]
     output_csv = sys.argv[3]
     full_protocol = sys.argv[4]
 
     length_ns = parse_length_ns(full_protocol)
 
-    calculate_rmsd_pymol(tar_path, ref_pdb_path, output_csv, length_ns)
+    calculate_rmsd_pymol(frame_dir, ref_pdb_path, output_csv, length_ns)
 
 
 if __name__ == "__main__":
