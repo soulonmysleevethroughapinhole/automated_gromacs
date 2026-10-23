@@ -7,7 +7,11 @@
 
 default_compute_target: HPC # local, hpc
 #default_compute_target: local # local, hpc
-
+# When true (default), resolve_targets requests the MD execution sentinel for
+# already-scheduled jobs, so a single snakemake invocation schedules AND runs
+# the MD (blocking on the HPC monitor until results are synced locally).
+# Set to false to restore the legacy behaviour of stopping after scheduling.
+run_md_after_scheduling: true
 # are these even used
 protocols:
   standard_100ns:

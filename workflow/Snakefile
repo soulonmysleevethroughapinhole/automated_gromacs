@@ -20,6 +20,34 @@ include: "rules/pymol.smk"
 include: "rules/analysis.smk"
 
 # Helper to resolve protocol paths based on config overrides
+def _compute_mode_for_target(pdb, source, model, protocol):
+	"""Determines the compute mode ('local' or 'HPC') for a protocol target.
+
+	Resolution order (mirrors schedule_md_job / schedule_custom_md so this
+	helper stays consistent with what those rules would write):
+		1. JOB/scheduling.yml on disk (authoritative once scheduled)
+		2. per-protocol 'compute_target' entry in config['custom_simulations']
+		3. config['default_compute_target'] (fallback 'local')
+	"""
+	scheduling_marker = f"results/gromacs/{pdb}/{source}/{model}/{protocol}/JOB/scheduling.yml"
+	if os.path.exists(scheduling_marker):
+		try:
+			import yaml
+			with open(scheduling_marker) as f:
+				data = yaml.safe_load(f) or {}
+			if data.get("COMPUTE") in ("local", "HPC"):
+				return data["COMPUTE"]
+		except Exception:
+			pass
+
+	entries = config.get("custom_simulations", {}).get(pdb, {}).get(f"{source}_{model}", [])
+	entry = next((e for e in entries if e.get("protocol") == protocol), None)
+	if entry and entry.get("compute_target") in ("local", "HPC"):
+		return entry["compute_target"]
+
+	return config.get("default_compute_target", "local")
+
+
 def resolve_targets(pdb, source, model):
 	target_key = f"{source}_{model}"
 	custom_jobs = config.get("custom_simulations", {}).get(pdb, {}).get(target_key, [])
@@ -30,26 +58,38 @@ def resolve_targets(pdb, source, model):
 	else:
 		protocols = [job["protocol"] for job in custom_jobs if "protocol" in job]
 
-		#return [f'results/analysis/plots/{pdb}/{source}/{model}/standard_100ns/analysis_complete.txt']
-	
+	# Opt-in flag to restore the legacy "queue-and-idle" behaviour, where a
+	# scheduled job is only prepared (JOB/ staged + scheduling.yml written) and
+	# the workflow exits without launching/blocking on the MD run itself.
+	run_after_schedule = str(config.get("run_md_after_scheduling", True)).lower() not in ("false", "0", "no")
+
 	job_paths = []
 	for protocol in protocols:
 		base_path = f"results/gromacs/{pdb}/{source}/{model}/{protocol}"
 
 		scheduling_marker = f"{base_path}/JOB/scheduling.yml"
 		completed_marker  = f"{base_path}/md_results/md_completed.txt"
-		#completed_marker = f"results/gromacs/{pdb}/{source}/{model}/{protocol}/md_results/md_completed.txt"
 
 		analysis_marker = f"results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt"
 
-		# ONLY queue analysis targets if the trajectory has finished on HPC and synced locally
-		if os.path.exists(completed_marker):
-			job_paths.append(analysis_marker)
-			#	f"results/analysis/plots/{pdb}/{source}/{model}/{protocol}/analysis_complete.txt"
-			#)
-		elif os.path.exists(scheduling_marker):
-			job_paths.append(scheduling_marker) #KEEPS SNAKEMAKE IDLE
-		else:
+		# ALWAYS request the terminal analysis marker. Snakemake then builds the
+		# full DAG prep -> EM -> schedule -> create job -> run MD -> finalize ->
+		# pbc correction -> analysis, regardless of filesystem state. Every stage
+		# is guarded by its own output sentinel, so already-completed steps are
+		# skipped instantly and execution continues exactly where it stopped:
+		#   * md_results/md_completed.txt exists  -> only analysis runs
+		#   * JOB/scheduling.yml exists           -> MD executes (the HPC monitor
+		#     attaches to active Slurm jobs via squeue and resumes from checkpoints)
+		#   * nothing exists                      -> cold start through the chain
+		# A bare file-existence ladder here previously produced the classic
+		# "Nothing to be done (all requested files are present and up to date)"
+		# whenever the requested target was an already-satisfied intermediate.
+		job_paths.append(analysis_marker)
+
+		if not run_after_schedule:
+			# Legacy opt-out: additionally request the scheduling checkpoint so a
+			# fresh invocation can stop after staging the job (queue-and-idle).
+			# Analysis is still requested so previously finalized sims keep flowing.
 			job_paths.append(scheduling_marker)
 	#for job in custom_jobs:
 	#	protocol = job["protocol"]
@@ -112,3 +152,4 @@ rule all:
 	input:
 		get_final_targets,
 		
+

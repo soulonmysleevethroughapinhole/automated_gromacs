@@ -85,22 +85,28 @@ class HPCJobManager:
 			return int(res.stdout.strip()) > 0
 		except ValueError:
 			return False
-	
+
+
 	def submit_job(self, unpack_job_archive: bool = True) -> str:
 		remote_target = self.remote_dir.strip()
 		script_name = os.path.basename(self.job_script)
 
+
+		def _sbatch_from(rel_path: str) -> str:
+			sub_dir = os.path.dirname(rel_path)
+			cd_prefix = f"cd '{sub_dir}' && " if sub_dir else ""
+			return f"{cd_prefix}sbatch '{os.path.basename(rel_path)}'"
 		# Build clean, deterministic remote SSH string
 		prep_cmd = (
 			f"mkdir -p '{remote_target}' && cd '{remote_target}' && "
 			f"if [ -f JOB.tar.gz ]; then tar -xzf JOB.tar.gz; fi && "
-			f"if [ -f '{script_name}' ]; then sbatch '{script_name}'; "
-			f"elif [ -f 'JOB/{script_name}' ]; then cd JOB && sbatch '{script_name}'; "
+			f"if [ -f '{script_name}' ]; then {_sbatch_from(script_name)}; "
+			f"elif [ -f 'JOB/{script_name}' ]; then {_sbatch_from('JOB/' + script_name)}; "
 			f"else echo \"Error: Explicit script '{script_name}' not found in $(pwd)\" >&2; exit 1; fi"
 		) if unpack_job_archive else (
 			f"mkdir -p '{remote_target}' && cd '{remote_target}' && "
-			f"if [ -f '{script_name}' ]; then sbatch '{script_name}'; "
-			f"elif [ -f 'JOB/{script_name}' ]; then cd JOB && sbatch '{script_name}'; "
+			f"if [ -f '{script_name}' ]; then {_sbatch_from(script_name)}; "
+			f"elif [ -f 'JOB/{script_name}' ]; then {_sbatch_from('JOB/' + script_name)}; "
 			f"else echo \"Error: Explicit script '{script_name}' not found in $(pwd)\" >&2; exit 1; fi"
 		)
 
@@ -229,10 +235,14 @@ class HPCJobManager:
 		target_subdir: str = "md_results",
 		poll_interval_sec: int = 300,
 		get_progress_fn=None,
-		unpack_job_archive: bool = True
+		unpack_job_archive: bool = True,
+		finalize_sentinel: str = None,
 	):
 		local_finalized_sentinel = os.path.join(self.local_dir, "md_results", "md_completed.txt")
-		if os.path.exists(local_finalized_sentinel):
+		if finalize_sentinel is None:
+			finalize_sentinel = local_finalized_sentinel
+		if os.path.exists(finalize_sentinel):
+		#if os.path.exists(local_finalized_sentinel):
 			self.logger.info("Local finalized results found. Bypassing HPC monitor.")
 			return
 

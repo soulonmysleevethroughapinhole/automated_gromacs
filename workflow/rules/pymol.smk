@@ -14,10 +14,25 @@ rule unpack_frames_tar:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/unpack_frames_tar.log"
 	shell:
 		"""
-		mkdir -p $(dirname {output.em_dir})
-		mkdir -p $(dirname {output.raw_dir})
-        tar -xzf {input.em_tar} -C $(dirname {output.em_dir}) > {log} 2>&1
-        tar -xzf {input.raw_tar} -C $(dirname {output.raw_dir}) > {log} 2>&1
+		rm -rf {output.em_dir} {output.raw_dir}
+		mkdir -p {output.em_dir} {output.raw_dir}
+
+		tar -xzf {input.em_tar} -C {output.em_dir} --strip-components=1 > {log} 2>&1
+		tar -xzf {input.raw_tar} -C {output.raw_dir} --strip-components=1 >> {log} 2>&1
+
+		# Synchronize EM_FRAMES so both frame_0.pdb and frame0.pdb exist
+		if [ -f "{output.em_dir}/frame_0.pdb" ]; then
+			cp -f "{output.em_dir}/frame_0.pdb" "{output.em_dir}/frame0.pdb"
+		elif [ -f "{output.em_dir}/frame0.pdb" ]; then
+			cp -f "{output.em_dir}/frame0.pdb" "{output.em_dir}/frame_0.pdb"
+		fi
+
+		# Synchronize RAW_FRAMES so both frame_0.pdb and frame0.pdb exist
+		if [ -f "{output.raw_dir}/frame_0.pdb" ]; then
+			cp -f "{output.raw_dir}/frame_0.pdb" "{output.raw_dir}/frame0.pdb"
+		elif [ -f "{output.raw_dir}/frame0.pdb" ]; then
+			cp -f "{output.raw_dir}/frame0.pdb" "{output.raw_dir}/frame_0.pdb"
+		fi
 		"""
 
 rule calculate_rmsd_to_em_empirical_CAN_STR:

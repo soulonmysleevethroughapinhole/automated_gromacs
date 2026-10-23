@@ -10,4 +10,6 @@ usage:
 
 conda activate snakemake
 
+if the code is modified, run snakemake --touch
+
 snakemake --cores 8

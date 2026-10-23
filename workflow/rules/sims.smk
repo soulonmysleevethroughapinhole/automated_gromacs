@@ -794,16 +794,58 @@ def execute_hpc_md_pipeline(
 			else:
 				get_progress_fn = get_simulation_progress
 
+		# If the finalize sentinel already exists locally, the results were
+		# finalized in a previous run -- nothing to do. Pass it explicitly so
+		# execute_pipeline's short-circuit works for custom protocols too
+		# (their md_results dir is derived from output_done_path's parent).
+		#finalize_sentinel = os.path.join(local_dir, "md_results", "md_completed.txt")
+		# ------------------------------------------------------------------
+		# 1. FIX SENTINEL PATH:
+		# local_dir is already '.../standard_100ns'. Do not use os.path.dirname(local_dir).
+		# ------------------------------------------------------------------
+		finalize_sentinel = os.path.join(local_dir, "md_results", "md_completed.txt")
+
 		hpc.execute_pipeline(
 			completion_check_file=f"{prefix}.gro",
-			target_subdir=target_subdir,
+			target_subdir=target_subdir,  # "md_results_HPC"
 			poll_interval_sec=poll_interval_sec,
 			get_progress_fn=get_progress_fn,
-			unpack_job_archive=True
+			unpack_job_archive=True,
+			finalize_sentinel=finalize_sentinel,
 		)
+
+		# ------------------------------------------------------------------
+		# 2. STAGING VERIFICATION:
+		# Only write HPC_md_completed.txt if md_results_HPC actually received files.
+		# ------------------------------------------------------------------
+		hpc_staging_dir = os.path.join(local_dir, target_subdir)
+		staged_files = os.listdir(hpc_staging_dir) if os.path.exists(hpc_staging_dir) else []
+
+		if not staged_files:
+			raise FileNotFoundError(
+				f"rsync completed for {target_id}, but no artifacts were found in staging dir '{hpc_staging_dir}'."
+			)
 
 		with open(output_done_path, "w") as f:
 			f.write(f"HPC MD simulation completed for {target_id}.\n")
+
+		#hpc.execute_pipeline(
+		#	completion_check_file=f"{prefix}.gro",
+		#	target_subdir=target_subdir,
+		#	poll_interval_sec=poll_interval_sec,
+		#	get_progress_fn=get_progress_fn,
+		#	unpack_job_archive=True,
+		#	finalize_sentinel=finalize_sentinel,
+		#)
+#
+		#expected_xtc = os.path.join(local_dir, target_subdir, f"{prefix}.xtc")
+		#if not os.path.exists(expected_xtc):
+		#	raise FileNotFoundError(
+		#		f"Synchronization completed, but expected trajectory '{expected_xtc}' was not found locally."
+		#	)
+
+		#with open(output_done_path, "w") as f:
+		#	f.write(f"HPC MD simulation completed for {target_id}.\n")
 
 		if callable(globals().get("log_sim_step")):
 			log_sim_step("DONE", step_log_file, f"HPC MD pipeline finished for {target_id}.")
@@ -842,7 +884,13 @@ rule run_local_md:
 
 		if target_mode != "local":
 			logger.info("Target %s is configured for HPC mode. Skipping local rule.", log)
-
+			# Write the sentinel anyway so finalize_md's dynamic input
+			# (det_compute_scheduling -> local_md_completed.txt) can be
+			# satisfied without launching a spurious mdrun. The real work
+			# happens in run_HPC_md, which shares this output file.
+			with open(output.done, "w") as f:
+					f.write(f"Skipped local MD for {wildcards.pdb}/{wildcards.source}/{wildcards.model_id} (compute target: {target_mode}).\n")
+			return
 
 
 		fmt = logging.Formatter("[%(asctime)s][%(levelname)s] %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
@@ -1153,8 +1201,8 @@ def get_pbc_correction_input_deps(wildcards):
 
 	return {
 		"done": f"{base_path}/md_completed.txt",
-		"xtc_md": f"{base_path}/{prefix}.xtc",
-		"tpr_md": f"{base_path}/{prefix}.tpr"
+		"xtc": f"{base_path}/{prefix}.xtc",
+		"tpr": f"{base_path}/{prefix}.tpr"
 	}
 
 rule pbc_correction_and_extract:
@@ -1178,38 +1226,31 @@ rule pbc_correction_and_extract:
 
 		mkdir -p $(dirname "$LOG_ABS")
 		mkdir -p $(dirname "$TAR_ABS")
-
-		# Change execution directory to md_results
-		cd $(dirname {input.xtc_md})
-
-		# 1. Recenter molecular unity boundaries
-		echo "Protein" | gmx trjconv \
-			-f $(basename {input.xtc_md}) \
-			-s $(basename {input.tpr_md}) \
+		cd $(dirname {input.xtc})
+		# 1. Recenter molecular unity boundaries (Output: System)
+		echo "System" | gmx trjconv \
+			-f $(basename {input.xtc}) \
+			-s $(basename {input.tpr}) \
 			-o md_whole.xtc \
 			-pbc mol -ur compact > "$LOG_ABS" 2>&1
 
-		# 2. Fit rotational/translational drift (Two distinct newline inputs)
-		
-		# 2a. Center protein in box (2 inputs: Centering group, Output group)
-		printf "Protein\nProtein\n" | gmx trjconv \
-		    -f md_whole.xtc \
-		    -s $(basename {input.tpr_md}) \
-		    -o md_centered.xtc \
-		    -center >> "$LOG_ABS" 2>&1
+		# 2a. Center protein in box (Center: Protein, Output: System)
+		(echo "Protein"; echo "System") | gmx trjconv \
+			-f md_whole.xtc \
+			-s $(basename {input.tpr}) \
+			-o md_centered.xtc \
+			-center >> "$LOG_ABS" 2>&1
 
-		# 2b. Fit rotational and translational drift (2 inputs: Fit group, Output group)
-		printf "Protein\nProtein\n" | gmx trjconv \
-		    -f md_centered.xtc \
-		    -s $(basename {input.tpr_md}) \
-		    -o md_clean.xtc \
-		    -fit rot+trans >> "$LOG_ABS" 2>&1
+		# 2b. Fit rotational and translational drift (Fit: Protein, Output: System)
+		(echo "Protein"; echo "System") | gmx trjconv \
+			-f md_centered.xtc \
+			-s $(basename {input.tpr}) \
+			-o md_clean.xtc \
+			-fit rot+trans >> "$LOG_ABS" 2>&1
 
-		# 3. Dynamic frame extraction (~500 frames target)
+		# 3. Dynamic frame extraction (~500 frames target, Output: Protein)
 		mkdir -p FRAMES
-		#TOTAL_PS=$(gmx check -f md_clean.xtc 2>&1 | grep "Step" | tail -n 1 | awk '{{print int($2)}}')
-		TOTAL_PS=$(gmx check -f md_clean.xtc 2>&1 | grep "Last frame" | awk '{{for(i=1;i<=NF;i++) if($i=="time") print int($(i+1))}}' | tail -n 1)
-		# Fallback if total ps parsing fails
+		TOTAL_PS=$( (gmx check -f md_clean.xtc 2>&1 | grep -E "Step|time" | tail -n 1 | awk '{{print int($NF)}}') || true )
 		if [ -z "$TOTAL_PS" ] || [ "$TOTAL_PS" -eq 0 ]; then TOTAL_PS=100000; fi
 
 		TARGET_FRAMES=500
@@ -1218,7 +1259,7 @@ rule pbc_correction_and_extract:
 
 		echo "Protein" | gmx trjconv \
 			-f md_clean.xtc \
-			-s $(basename {input.tpr_md}) \
+			-s $(basename {input.tpr}) \
 			-o FRAMES/frame.pdb \
 			-dt "$DT_PS" \
 			-sep >> "$LOG_ABS" 2>&1
@@ -1227,7 +1268,7 @@ rule pbc_correction_and_extract:
 		tar -czf "$TAR_ABS" FRAMES >> "$LOG_ABS" 2>&1
 
 		# 5. Clean up temporary files
-		rm -f md_whole.xtc md_clean.xtc
+		rm -f md_whole.xtc md_centered.xtc md_clean.xtc
 		rm -rf FRAMES
 		"""
 
