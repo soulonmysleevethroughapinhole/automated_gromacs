@@ -18,6 +18,7 @@ include: "rules/gmx_energy_minimization.smk"
 include: "rules/mopac.smk"
 include: "rules/pymol.smk"
 include: "rules/analysis.smk"
+include: "rules/data_cleaning.smk"
 
 # Helper to resolve protocol paths based on config overrides
 def _compute_mode_for_target(pdb, source, model, protocol):

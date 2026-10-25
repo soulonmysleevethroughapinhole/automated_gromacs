@@ -1,3 +1,6 @@
+import os
+import sys
+
 def convert_pdb_to_mop(pdb_path, mop_path):
     """
     Converts a PDB structure to a MOPAC .mop input file.

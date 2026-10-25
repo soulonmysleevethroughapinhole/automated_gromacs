@@ -41,7 +41,7 @@ rule calculate_rmsd_to_em_empirical_CAN_STR:
 		#canonical_structure = "results/structures/{pdb}/empirical/canonical_structure.pdb"
 		em_canonical_structure = "results/gmx_em/{pdb}/empirical/em_canonical_structure.pdb"
 	output:
-		rmsd_to_em_canonical = "results/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv"
+		rmsd_to_em_canonical = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/calculate_rmsd_to_em_canonical.log"
 	shell:
@@ -52,7 +52,7 @@ rule calculate_rmsd_to_em_SELF_frame_0:
 		em_dir = "data/simulations/{pdb}/{source}/{model_id}/{protocol}/em_500fr_target/EM_FRAMES",
 		frame_0 = "data/simulations/{pdb}/{source}/{model_id}/{protocol}/em_500fr_target/EM_FRAMES/frame_0.pdb"
 	output:
-		rmsd_to_frame_0 = "results/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_frame_0.csv"
+		rmsd_to_frame_0 = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_frame_0.csv"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/calculate_rmsd_to_em_frame0.log"
 	shell:

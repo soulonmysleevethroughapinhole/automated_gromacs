@@ -11,5 +11,9 @@ usage:
 conda activate snakemake
 
 if the code is modified, run snakemake --touch
+note: if simulation is already running on HPC then touching won't complete
 
+if sims are runnig use : snakemake --rerun-triggers mtime input --cores 8 
+
+if all is fine:
 snakemake --cores 8

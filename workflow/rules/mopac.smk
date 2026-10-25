@@ -49,7 +49,7 @@ rule hof_relative_and_delta:
 		single_heat_of_formation = "results/mopac/{pdb}/{source}/{model_id}/SINGLE/heat_of_formation.csv",
 		heat_of_formation = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation.csv",
 	output:
-		hofcsv = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation_relative_and_delta.csv"
+		hofcsv = "data/simulations/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation_relative_and_delta.csv"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/mopac/hof_relative_and_delta.log"
 	shell:

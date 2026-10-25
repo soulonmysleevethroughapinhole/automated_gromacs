@@ -22,25 +22,28 @@ rule absolute_analysis_pdb:
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_sasa.xvg",
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp_num.xvg",
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_summary.csv",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv"
+		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv",
+		"data/united/{pdb}/{source}/{model_id}/{protocol}/united_data.csv"
+
 	output:
 		touch("results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/analysis_complete.txt")
 
 rule plot_run_hof_n_FRAME0RMSD__vs_time:
 	input:
-		rmsd_to_frame0 = "results/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_frame_0.csv",
+		rmsd_to_frame_0 = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_frame_0.csv",
 		hof = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation.csv"
 	output:
 		plot = "results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/rmsdFRAME0_n_hof_vs_time.png"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/plot_rmsdFRAME0_n_hof_vs_time.log"
 	shell:
-		"python scripts/smk/analysis/plot_run_hof_n_rmsd_vs_time.py {input.rmsd_to_frame0} {input.hof} {output.plot} {wildcards.pdb} {wildcards.source} {wildcards.model_id} > {log} 2>&1"
+		"python scripts/smk/analysis/plot_run_hof_n_rmsd_vs_time.py {input.rmsd_to_frame_0} {input.hof} {output.plot} {wildcards.pdb} {wildcards.source} {wildcards.model_id} > {log} 2>&1"
 
 
 rule plot_run_hof_n_CAN_EMP_RMSD_vs_time:
 	input:
-		rmsd_to_em_canonical = "results/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv",
+		#rmsd_to_em_canonical = "results/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv",
+		rmsd_to_em_canonical = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv",
 		hof = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation.csv"
 	output:
 		plot = "results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/rmsdCANEMP_n_hof_vs_time.png"
@@ -51,18 +54,18 @@ rule plot_run_hof_n_CAN_EMP_RMSD_vs_time:
 
 rule plot_rmsd_to_frame0_vs_hof:
 	input:
-		rmsd_to_frame0 = "results/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_frame_0.csv",
+		rmsd_to_frame_0 = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_frame_0.csv",
 		hof = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation.csv"
 	output:
 		plot = "results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/rmsdframe0_vs_hof.png"
 	log:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/plot_rmsdframe0_vs_hof.log"
 	shell:
-		"python scripts/smk/analysis/plot_rmsd_vs_hof.py {input.rmsd_to_frame0} {input.hof} {output.plot} {wildcards.pdb} {wildcards.source} {wildcards.model_id} > {log} 2>&1"
+		"python scripts/smk/analysis/plot_rmsd_vs_hof.py {input.rmsd_to_frame_0} {input.hof} {output.plot} {wildcards.pdb} {wildcards.source} {wildcards.model_id} > {log} 2>&1"
 
 rule plot_rmsd_to_em_canonical_vs_hof:
 	input:
-		rmsd_to_em_canonical = "results/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv",
+		rmsd_to_em_canonical = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv",
 		hof = "results/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation.csv"
 	output:
 		plot = "results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/rmsdemcan_vs_hof.png"
