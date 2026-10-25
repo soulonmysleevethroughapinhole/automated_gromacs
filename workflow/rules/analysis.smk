@@ -199,7 +199,8 @@ rule parse_MM_energies:
 rule GMX_gyrate:
 	input:
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
-		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
+		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.tpr",
+		#tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
 	output:
 		gyrate = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_gyrate.xvg"
 	log:
@@ -216,7 +217,8 @@ rule GMX_gyrate:
 rule GMX_sasa:
 	input:
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
-		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
+		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.tpr",
+		#tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
 	output:
 		sasa = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_sasa.xvg"
 	log:
@@ -226,13 +228,15 @@ rule GMX_sasa:
 		echo "Protein" | gmx sasa \
 			-s {input.tpr_md} \
 			-f {input.xtc_md} \
-			-o {output.sasa} > {log} 2>&1
+			-o {output.sasa} \
+			-surface "Protein" > {log} 2>&1
 		"""
 
 rule GMX_dssp:
 	input:
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
-		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
+		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.tpr",
+		#tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
 	output:
 		dssp_dat = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp.dat",
 		dssp_num = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp_num.xvg"

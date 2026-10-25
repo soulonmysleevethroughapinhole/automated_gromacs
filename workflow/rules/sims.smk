@@ -1053,37 +1053,33 @@ rule finalize_md:
 			# ------------------------------------------------------------------
 			if compute_target == "HPC":
 				if os.path.exists(hpc_staging_dir):
-					logger.info("Staging directory found at %s. Moving artifacts to %s...", hpc_staging_dir, out_dir)
-					moved_count = 0
-
-					for item in os.listdir(hpc_staging_dir):
-						src = os.path.join(hpc_staging_dir, item)
-						dst = os.path.join(out_dir, item)
-
-						if os.path.isfile(src):
-							shutil.move(src, dst)
-							logger.info("Moved file: %s -> %s", item, dst)
-							moved_count += 1
-						elif os.path.isdir(src):
-							logger.info("Scanning nested directory inside staging: %s", item)
-							for nested_fn in os.listdir(src):
-								nested_src = os.path.join(src, nested_fn)
-								nested_dst = os.path.join(out_dir, nested_fn)
-								shutil.move(nested_src, nested_dst)
-								logger.info("Moved nested file: %s -> %s", nested_fn, nested_dst)
-								moved_count += 1
-
-					logger.info("Successfully relocated %d items from HPC staging.", moved_count)
-					shutil.rmtree(hpc_staging_dir, ignore_errors=True)
-					logger.info("Cleaned up staging folder: %s", hpc_staging_dir)
-				else:
-					logger.warning("HPC staging directory %s does not exist. Checking protocol root for fallback files...", hpc_staging_dir)
-					for ext in [".xtc", ".tpr", ".cpt", ".gro", ".edr", ".log"]:
-						src = os.path.join(protocol_dir, f"{prefix}{ext}")
-						dst = os.path.join(out_dir, f"{prefix}{ext}")
-						if os.path.exists(src) and not os.path.exists(dst):
-							shutil.move(src, dst)
-							logger.info("Moved fallback file from protocol root: %s -> %s", src, dst)
+					VALID_EXTENSIONS = {".xtc", ".tpr", ".cpt", ".edr", ".gro", ".log", ".txt"}
+	
+					if os.path.exists(hpc_staging_dir):
+						logger.info("Staging directory found at %s. Moving MD artifacts to %s...", hpc_staging_dir, out_dir)
+						moved_count = 0
+	
+						for root, _, files in os.walk(hpc_staging_dir):
+							for fn in files:
+								ext = os.path.splitext(fn)[1].lower()
+								if ext in VALID_EXTENSIONS:
+									src = os.path.join(root, fn)
+									dst = os.path.join(out_dir, fn)
+									shutil.move(src, dst)
+									logger.info("Moved MD artifact: %s -> %s", fn, dst)
+									moved_count += 1
+	
+						logger.info("Successfully relocated %d MD artifacts from HPC staging.", moved_count)
+						shutil.rmtree(hpc_staging_dir, ignore_errors=True)
+						logger.info("Cleaned up staging folder: %s", hpc_staging_dir)				
+					else:
+						logger.warning("HPC staging directory %s does not exist. Checking protocol root for fallback files...", hpc_staging_dir)
+						for ext in [".xtc", ".tpr", ".cpt", ".gro", ".edr", ".log"]:
+							src = os.path.join(protocol_dir, f"{prefix}{ext}")
+							dst = os.path.join(out_dir, f"{prefix}{ext}")
+							if os.path.exists(src) and not os.path.exists(dst):
+								shutil.move(src, dst)
+								logger.info("Moved fallback file from protocol root: %s -> %s", src, dst)
 
 				# Fallback renames for generic 'md.*' naming
 				generic_xtc = os.path.join(out_dir, "md.xtc")
