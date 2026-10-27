@@ -23,7 +23,8 @@ rule absolute_analysis_pdb:
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp_num.xvg",
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_summary.csv",
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv",
-		"data/united/{pdb}/{source}/{model_id}/{protocol}/united_data.csv"
+		"data/united/{pdb}/{source}/{model_id}/{protocol}/united_data.csv",
+		#"results/gmx_rerun/{pdb}/{source}/{model_id}/{protocol}/rerun_energy.edr" #just so it gets pulled thru
 
 	output:
 		touch("results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/analysis_complete.txt")

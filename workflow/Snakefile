@@ -15,6 +15,7 @@ configfile: "config/config.yaml"
 include: "rules/prep.smk"
 include: "rules/sims.smk"
 include: "rules/gmx_energy_minimization.smk"
+include: "rules/gmx_energies.smk"
 include: "rules/mopac.smk"
 include: "rules/pymol.smk"
 include: "rules/analysis.smk"
@@ -109,6 +110,10 @@ def resolve_targets(pdb, source, model):
 	
 # DYNAMIC ROUTING FUNCTION
 # This function will dynamically determine the final targets for the Snakemake DAG based on the evaluation of the predicted models against the empirical structures. It checks if the predicted models are structurally divergent enough to warrant further processing (e.g., MD simulations) or if they should be rejected.
+# this is like crack
+# get off it
+# hopefully it will be phased out through the use of 
+# lots of smaller targets in individual smks 
 def get_final_targets(wildcards):
 	targets = []
 	
@@ -149,8 +154,20 @@ def get_final_targets(wildcards):
 		
 	return targets
 
+def get_all_active_targets(wildcards):
+	targets = []
+
+	# hopefully it will be phased out through the use of smaller target batches
+	targets.extend(get_final_targets(wildcards))
+
+	targets.extend(get_rerun_energy_targets(config))
+
+	return targets
+
+
 rule all:
 	input:
-		get_final_targets,
+		#get_final_targets,
+		get_all_active_targets,
 		
 
