@@ -4,6 +4,8 @@ Requires conda, GROMACS, MOPAC, and a pymol installation on your machine.
 
 Can be run locally, or be used to orchestrate processes on HPC over ssh (use at yo own risk)
 
+Connect to HPC over ssh, and leave the connection open while running the snakemake workflow. I think it'd be possible/preferable to mirror the SLURM queue, so that may be an avenue for improvement.
+
 
 
 usage:
