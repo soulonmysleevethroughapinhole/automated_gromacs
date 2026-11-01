@@ -25,7 +25,8 @@ def get_rerun_energy_targets(config):
 		for proto in protocols:
 			done_file = f"{empirical_base}/{proto}/md_results/md_completed.txt"
 			if os.path.exists(done_file):
-				targets.append(f"data/gmx_rerun/{pdb}/empirical/canonical_structure/{proto}/gmx_rerun_energies_parsed.csv")
+				#targets.append(f"data/gmx_rerun/{pdb}/empirical/canonical_structure/{proto}/gmx_rerun_energies_parsed.csv")
+				targets.append(f"data/united/{pdb}/empirical/canonical_structure/{proto}/scored_united_data.csv")
 		#parsed_energies = "data/gmx_rerun/{pdb}/{source}/{model_id}/{protocol}/"
 
 		# 2. Prediction sources (alphafold, colabfold, etc.)
@@ -39,7 +40,8 @@ def get_rerun_energy_targets(config):
 						for proto in os.listdir(model_path):
 							done_file = os.path.join(model_path, proto, "md_results", "md_completed.txt")
 							if os.path.exists(done_file):
-								targets.append(f"data/gmx_rerun/{pdb}/{source}/{model_id}/{proto}/gmx_rerun_energies_parsed.csv")
+								#targets.append(f"data/gmx_rerun/{pdb}/{source}/{model_id}/{proto}/gmx_rerun_energies_parsed.csv")
+								targets.append(f"data/united/{pdb}/{source}/{model_id}/{proto}/scored_united_data.csv")
 
 	return targets
 
@@ -212,3 +214,23 @@ rule parse_rerun_MM_energies:
 			with open(log[0], "w") as l:
 				l.write(f"Error parsing energies: {str(e)}\n")
 			raise e
+
+rule score_native_candidates:
+    input:
+        united_csv = "data/united/{pdb}/{source}/{model_id}/{protocol}/united_data.csv"
+    output:
+        scored_csv = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/scored_united_data.csv",
+        top_candidates = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/top_candidates.csv"
+    log:
+        "logs/{pdb}/{source}/{model_id}/{protocol}/score_native_candidates.log"
+    shell:
+        """
+        mkdir -p $(dirname {output.scored_csv})
+        mkdir -p $(dirname {log})
+
+        python scripts/smk/analysis/score_native_candidates.py \
+            {input.united_csv} \
+            {output.scored_csv} \
+            {output.top_candidates} \
+            5 > {log} 2>&1
+        """

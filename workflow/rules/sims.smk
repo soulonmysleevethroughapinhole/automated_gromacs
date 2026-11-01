@@ -1246,9 +1246,14 @@ rule pbc_correction_and_extract:
 
 		# 3. Dynamic frame extraction (~500 frames target, Output: Protein)
 		mkdir -p FRAMES
-		TOTAL_PS=$( (gmx check -f md_clean.xtc 2>&1 | grep -E "Step|time" | tail -n 1 | awk '{{print int($NF)}}') || true )
-		if [ -z "$TOTAL_PS" ] || [ "$TOTAL_PS" -eq 0 ]; then TOTAL_PS=100000; fi
 
+		RAW_TIME=$(gmx check -f md_clean.xtc 2>&1 | grep -i "Step" | tail -n 1 | awk 'NF{{print int($NF)}}')
+		if [ -z "$RAW_TIME" ] || [ "$RAW_TIME" -le 0 ]; then
+			TOTAL_PS=1000000
+		else
+			TOTAL_PS=$RAW_TIME
+		fi
+		
 		TARGET_FRAMES=500
 		DT_PS=$(( TOTAL_PS / TARGET_FRAMES ))
 		if [ "$DT_PS" -lt 10 ]; then DT_PS=10; fi
@@ -1261,7 +1266,15 @@ rule pbc_correction_and_extract:
 			-sep >> "$LOG_ABS" 2>&1
 
 		# 4. Compress coordinate frames
-		tar -czf "$TAR_ABS" FRAMES >> "$LOG_ABS" 2>&1
+		# 4. Compress coordinate frames safely
+
+		if [ -d "FRAMES" ] && [ "$(ls -A FRAMES)" ]; then
+			tar -czf "$TAR_ABS" FRAMES >> "$LOG_ABS" 2>&1
+		else
+			echo "ERROR: trjconv failed to produce frames in FRAMES/" >> "$LOG_ABS"
+			exit 1
+		fi
+		#tar -czf "$TAR_ABS" FRAMES >> "$LOG_ABS" 2>&1
 
 		# 5. Clean up temporary files
 		rm -f md_whole.xtc md_centered.xtc md_clean.xtc
@@ -1850,6 +1863,9 @@ rule finalize_custom_md:
 				raise FileNotFoundError(f"Required topology file '{prefix}.tpr' was not found in {search_dirs}")
 
 			# Write sentinel file
+			#TODO:
+			# Validate trajectory integrity before writing sentinel
+			# gmx check -f {input.xtc} > /dev/null 2>&1 && touch {output.done}
 			with open(output.done, "w") as f:
 				f.write(f"Custom MD protocol '{wildcards.protocol}' successfully finalized for {target_id}.\n")
 

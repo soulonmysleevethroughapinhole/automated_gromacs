@@ -6,6 +6,39 @@
 import pandas as pd
 import sys
 
+def get_analysis_targets(config):
+	targets = []
+
+	for pdb in config.get("pdbs", []):
+		# handle empiricals
+		empirical_base = f'results/gromacs/{pdb}/empirical/canonical_structure'
+		# Gather custom protocols and standard_100ns
+		custom_entries = config.get("custom_simulations", {}).get(pdb, {}).get("empirical_canonical_structure", [])
+		protocols = [e["protocol"] for e in custom_entries if "protocol" in e]
+		if not protocols:
+			protocols = ["standard_100ns"]
+			
+		for proto in protocols:
+			done_file = f"{empirical_base}/{proto}/md_results/md_completed.txt"
+			if os.path.exists(done_file):
+				targets.append(f"results/analysis/plots/{pdb}/empirical/canonical_structure/{proto}/analysis_complete.txt")
+		#parsed_energies = "data/gmx_rerun/{pdb}/{source}/{model_id}/{protocol}/"
+
+		# 2. Prediction sources (alphafold, colabfold, etc.)
+		for source in config.get("prediction_sources", []):
+			# Scan filesystem directly for completed prediction runs
+			pred_dir = f"results/gromacs/{pdb}/{source}"
+			if os.path.exists(pred_dir):
+				for model_id in os.listdir(pred_dir):
+					model_path = os.path.join(pred_dir, model_id)
+					if os.path.isdir(model_path):
+						for proto in os.listdir(model_path):
+							done_file = os.path.join(model_path, proto, "md_results", "md_completed.txt")
+							if os.path.exists(done_file):
+								targets.append(f"results/analysis/plots/{pdb}/{source}/{model_id}/{proto}/analysis_complete.txt")
+	
+	return targets
+
 rule absolute_analysis_pdb:
 	input:
 		# split into two each
@@ -23,7 +56,7 @@ rule absolute_analysis_pdb:
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp_num.xvg",
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_summary.csv",
 		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv",
-		"data/united/{pdb}/{source}/{model_id}/{protocol}/united_data.csv",
+		#"data/united/{pdb}/{source}/{model_id}/{protocol}/united_data.csv",
 		#"results/gmx_rerun/{pdb}/{source}/{model_id}/{protocol}/rerun_energy.edr" #just so it gets pulled thru
 
 	output:
@@ -95,6 +128,7 @@ def get_md_file_prefix(wildcards):
 
 rule GMX_rmsd:
 	input:
+		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
 		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
 	output:
@@ -112,6 +146,7 @@ rule GMX_rmsd:
 
 rule GMX_rmsf:
 	input:
+		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
 		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
 	output:
@@ -199,6 +234,7 @@ rule parse_MM_energies:
 
 rule GMX_gyrate:
 	input:
+		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
 		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.tpr",
 		#tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
@@ -217,6 +253,7 @@ rule GMX_gyrate:
 
 rule GMX_sasa:
 	input:
+		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
 		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.tpr",
 		#tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
@@ -235,6 +272,7 @@ rule GMX_sasa:
 
 rule GMX_dssp:
 	input:
+		done = "results/gromacs/{pdb}/{source}/{model_id}/{protocol}/md_results/md_completed.txt",
 		xtc_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.xtc",
 		tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/md_results/{get_md_file_prefix(wildcards)}.tpr",
 		#tpr_md = lambda wildcards: f"results/gromacs/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/JOB/{get_md_file_prefix(wildcards)}.tpr"
@@ -245,15 +283,16 @@ rule GMX_dssp:
 		"logs/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp.log"
 	shell:
 		"""
+		mkdir -p $(dirname {output.dssp_dat})
+		mkdir -p $(dirname {log})
+
+		export DSSP=$(which dssp || which mkdssp || echo "dssp")
+		
 		echo "MainChain" | gmx dssp \
 			-s {input.tpr_md} \
 			-f {input.xtc_md} \
 			-o {output.dssp_dat} \
 			-num {output.dssp_num} > {log} 2>&1 || \
-		echo "Protein" | gmx do_dssp \
-			-s {input.tpr_md} \
-			-f {input.xtc_md} \
-			-o results/analysis/{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}/gmx_dssp.xpm > {log} 2>&1
 		"""
 
 def parse_xvg(filepath, value_col_name="val"):

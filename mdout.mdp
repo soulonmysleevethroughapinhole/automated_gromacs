@@ -2,7 +2,7 @@
 ;	File 'mdout.mdp' was generated
 ;	By user: johnnys (1000)
 ;	On host: UP
-;	At date: Wed Oct 28 17:33:52 2026
+;	At date: Sun Nov  1 10:20:39 2026
 ;
 ;	Created by:
 ;	                     :-) GROMACS - gmx grompp, 2025.3 (-:
@@ -11,7 +11,7 @@
 ;	Data prefix:  /usr/local/gromacs
 ;	Working dir:  /home/johnnys/Projects/automated_gromacs
 ;	Command line:
-;	  gmx grompp -f results/gmx_rerun/9UCN/empirical/canonical_structure/standard_100ns/protsolenergygrps.mdp -c results/gmx_rerun/9UCN/empirical/canonical_structure/standard_100ns/original.gro -p results/gmx_rerun/9UCN/empirical/canonical_structure/standard_100ns/original.top -o results/gmx_rerun/9UCN/empirical/canonical_structure/standard_100ns/rerun_energy.tpr -maxwarn 1
+;	  gmx grompp -f results/gmx_rerun/7UU9/empirical/canonical_structure/standard_100ns/protsolenergygrps.mdp -c results/gmx_rerun/7UU9/empirical/canonical_structure/standard_100ns/original.gro -p results/gmx_rerun/7UU9/empirical/canonical_structure/standard_100ns/original.top -o results/gmx_rerun/7UU9/empirical/canonical_structure/standard_100ns/rerun_energy.tpr -maxwarn 1
 
 ; VARIOUS PREPROCESSING OPTIONS
 ; Preprocessor information: use cpp syntax.

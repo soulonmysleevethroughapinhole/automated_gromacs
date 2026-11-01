@@ -3,6 +3,7 @@ __pycache__/
 .snakemake
 .env
 results
+unused
 data
 logs
 workflow/rules/sims_recovered.smk

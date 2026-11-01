@@ -30,7 +30,8 @@ import numpy as np
 rule united_simulation_data:
 	input:
 		gmx_summary = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_summary.csv",
-		gmx_energies_summary = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv",
+		#gmx_energies_summary = "results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv",
+		gmx_energies_summary = "data/gmx_rerun/{pdb}/{source}/{model_id}/{protocol}/gmx_rerun_energies_parsed.csv",
 		mopac_summary = "data/simulations/mopac/{pdb}/{source}/{model_id}/{protocol}/frames/heat_of_formation_relative_and_delta.csv",
 		rmsd_to_em_canonical = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_em_empirical.csv",
 		rmsd_to_frame_0 = "data/simulations/rmsd/{pdb}/{source}/{model_id}/{protocol}/pymol_results/frames/rmsd_to_frame_0.csv"

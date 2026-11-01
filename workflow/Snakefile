@@ -162,6 +162,8 @@ def get_all_active_targets(wildcards):
 	# extending with modular targets, before the expensive catchall
 	targets.extend(get_rerun_energy_targets(config))
 
+	#targets.extend(get_analysis_targets(config))
+
 	# hopefully it will be phased out through the use of smaller target batches
 	targets.extend(get_final_targets(wildcards))
 
