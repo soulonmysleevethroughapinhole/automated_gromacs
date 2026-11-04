@@ -104,13 +104,13 @@ custom_simulations:
           - { time_ns: 0, temp_k: 300 }
           - { time_ns: 100, temp_k: 450 }
           - { time_ns: 500, temp_k: 300 }
-      - protocol: 'simulated-annealing_1us_HCS'
-        compute_target: "HPC"
-        temperature_schedule:
-          - { time_ns: 0, temp_k: 300 }
-          - { time_ns: 100, temp_k: 450 }
-          - { time_ns: 800, temp_k: 450 }
-          - { time_ns: 900, temp_k: 300 }
+      #- protocol: 'simulated-annealing_1us_HCS' # BOX SIZE BAD CAUSING BAD RUNS TOO HOT TOO
+      #  compute_target: "HPC"
+      #  temperature_schedule:
+      #    - { time_ns: 0, temp_k: 300 }
+      #    - { time_ns: 100, temp_k: 450 }
+      #    - { time_ns: 800, temp_k: 450 }
+      #    - { time_ns: 900, temp_k: 300 }
       - protocol: 'simulated-annealing_2000ns'
         compute_target: "HPC"
         temperature_schedule:
@@ -221,6 +221,24 @@ custom_simulations:
     colabfold_model_5:
       - protocol: 'standard_100ns'
         compute_target: 'HPC'
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+  8A55:
+    empirical_canonical_structure:
+      - protocol: 'simulated-annealing_1us_HCS'
+        compute_target: "HPC"
+        temperature_schedule:
+          - { time_ns: 0, temp_k: 300 }
+          - { time_ns: 100, temp_k: 450 }
+          - { time_ns: 800, temp_k: 450 }
+          - { time_ns: 900, temp_k: 300 }
+  9UCN:
+    empirical_canonical_structure:
       - protocol: 'simulated-annealing_1us_HCS'
         compute_target: "HPC"
         temperature_schedule:

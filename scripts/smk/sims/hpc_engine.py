@@ -70,11 +70,33 @@ class HPCJobManager:
 		return res.returncode == 0 and "YES" in res.stdout
 
 	def get_active_job_id(self) -> str | None:
-		squeue_cmd = f"squeue -u {self.hpc_user} -n {self.job_name} -h -o '%i %t'"
+		"""
+		Queries squeue for active jobs matching self.job_name.
+		Uses prefix matching to handle Slurm job-name truncation and returns
+		the base job ID for job arrays.
+		"""
+		# Match using first 50 characters to stay well under Slurm's 70-char truncation cap
+		search_prefix = self.job_name[:50]
+
+		# Fetch job ID, status, and job name for all user jobs
+		squeue_cmd = f"squeue -u {self.hpc_user} -h -o '%i %t %j'"
 		res = self._run_ssh(squeue_cmd)
-		q_out = res.stdout.strip()
-		if q_out:
-			return q_out.split()[0]
+
+		if not res or not res.stdout:
+			return None
+
+		for line in res.stdout.strip().splitlines():
+			parts = line.split()
+			if len(parts) >= 3:
+				job_id_raw, status, name = parts[0], parts[1], parts[2]
+
+				# Match active states (Pending, Running, Completing)
+				if name.startswith(search_prefix) and status in ("PD", "R", "CG"):
+					# Strip array suffix (e.g., '14870191_[0-499%32' -> '14870191')
+					base_job_id = job_id_raw.split('_')[0]
+					self.logger.info("Found active Slurm job %s (Status: %s) for %s", base_job_id, status, self.job_name)
+					return base_job_id
+
 		return None
 
 	def has_checkpoint(self) -> bool:

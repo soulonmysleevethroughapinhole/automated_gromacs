@@ -33,7 +33,7 @@ HPC_GMX_HOME = os.getenv("HPC_GMX_HOME")
 HPC_TIME = os.getenv("HPC_TIME")
 SUBMIT_HPC = os.getenv("SUBMIT_HPC", "0")
 SSH_DAEMON_PORT = os.getenv("SSH_DAEMON_PORT", "22")  # Default to port 22 if not set
-
+SSH_TARGET= os.getenv("SSH_TARGET") 
 
 # Rule 1.75: Prepare protein and  generate topology
 rule prepare_system:
@@ -565,7 +565,7 @@ rule create_md_job:
 				# Remote Sync via SSH/Rsync
 				remote_dir = os.path.join(HPC_REMOTE_BASE, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/standard_100ns")
 				#ssh_target = f"{HPC_USER}@{HPC_HOST}"
-				ssh_target = "komondor"
+				ssh_target = SSH_TARGET
 				logger.info("Deploying archive to remote target %s:%s", ssh_target, remote_dir)
 
 				shell("""
@@ -775,7 +775,7 @@ def execute_hpc_md_pipeline(
 	job_name = f"md_{pdb}_{source}_{model_id}_{protocol}"
 
 	hpc = HPCJobManager(
-		ssh_target="komondor",
+		ssh_target=SSH_TARGET,
 		remote_dir=remote_dir,
 		local_dir=local_dir,
 		job_name=job_name,
@@ -1593,7 +1593,7 @@ rule create_custom_md_job:
 
 				# Remote Sync via SSH/Rsync to remote protocol path
 				remote_dir = os.path.join(HPC_REMOTE_BASE, f"{wildcards.pdb}/{wildcards.source}/{wildcards.model_id}/{wildcards.protocol}")
-				ssh_target = "komondor"
+				ssh_target = SSH_TARGET
 				logger.info("Deploying archive to remote target %s:%s", ssh_target, remote_dir)
 
 				shell("""

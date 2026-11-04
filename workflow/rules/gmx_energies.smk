@@ -18,7 +18,13 @@ def get_rerun_energy_targets(config):
 		empirical_base = f'results/gromacs/{pdb}/empirical/canonical_structure'
 		# Gather custom protocols and standard_100ns
 		custom_entries = config.get("custom_simulations", {}).get(pdb, {}).get("empirical_canonical_structure", [])
-		protocols = [e["protocol"] for e in custom_entries if "protocol" in e]
+		
+		# NOTE: TEMPORARILY DISABLE CUSTOM RERUNS 
+		#protocols = [e["protocol"] for e in custom_entries if "protocol" in e]
+		protocols = ["standard_100ns"]
+		
+
+
 		if not protocols:
 			protocols = ["standard_100ns"]
 			
@@ -26,7 +32,7 @@ def get_rerun_energy_targets(config):
 			done_file = f"{empirical_base}/{proto}/md_results/md_completed.txt"
 			if os.path.exists(done_file):
 				#targets.append(f"data/gmx_rerun/{pdb}/empirical/canonical_structure/{proto}/gmx_rerun_energies_parsed.csv")
-				targets.append(f"data/united/{pdb}/empirical/canonical_structure/{proto}/scored_united_data.csv")
+				targets.append(f"results/analysis/{pdb}/empirical/canonical_structure/{proto}/scored_united_data.csv")
 		#parsed_energies = "data/gmx_rerun/{pdb}/{source}/{model_id}/{protocol}/"
 
 		# 2. Prediction sources (alphafold, colabfold, etc.)
@@ -41,7 +47,7 @@ def get_rerun_energy_targets(config):
 							done_file = os.path.join(model_path, proto, "md_results", "md_completed.txt")
 							if os.path.exists(done_file):
 								#targets.append(f"data/gmx_rerun/{pdb}/{source}/{model_id}/{proto}/gmx_rerun_energies_parsed.csv")
-								targets.append(f"data/united/{pdb}/{source}/{model_id}/{proto}/scored_united_data.csv")
+								targets.append(f"results/analysis/{pdb}/{source}/{model_id}/{proto}/scored_united_data.csv")
 
 	return targets
 

@@ -49,13 +49,20 @@ rule absolute_analysis_pdb:
 		"results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/rmsdframe0_vs_hof.png",
 		"results/analysis/plots/{pdb}/{source}/{model_id}/{protocol}/rmsdemcan_vs_hof.png",
 		"results/movies/{pdb}/{source}/{model_id}/{protocol}_md_trajectory.mov",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_rmsd.xvg",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_rmsf.xvg",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_gyrate.xvg",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_sasa.xvg",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp_num.xvg",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_summary.csv",
-		"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv",
+		#"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_rmsd.xvg",
+		#"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_rmsf.xvg",
+		#"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_gyrate.xvg",
+		#"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_sasa.xvg",
+		#"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_dssp_num.xvg",
+		#"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_summary.csv",
+		#"results/analysis/{pdb}/{source}/{model_id}/{protocol}/gmx_energies_parsed.csv",
+		"results/analysis/{pdb}/{source}/{model_id}/standard_100ns/gmx_rmsd.xvg",
+		"results/analysis/{pdb}/{source}/{model_id}/standard_100ns/gmx_rmsf.xvg",
+		"results/analysis/{pdb}/{source}/{model_id}/standard_100ns/gmx_gyrate.xvg",
+		"results/analysis/{pdb}/{source}/{model_id}/standard_100ns/gmx_sasa.xvg",
+		"results/analysis/{pdb}/{source}/{model_id}/standard_100ns/gmx_dssp_num.xvg",
+		"results/analysis/{pdb}/{source}/{model_id}/standard_100ns/gmx_summary.csv",
+		"results/analysis/{pdb}/{source}/{model_id}/standard_100ns/gmx_energies_parsed.csv",
 		#"data/united/{pdb}/{source}/{model_id}/{protocol}/united_data.csv",
 		#"results/gmx_rerun/{pdb}/{source}/{model_id}/{protocol}/rerun_energy.edr" #just so it gets pulled thru
 
@@ -292,7 +299,7 @@ rule GMX_dssp:
 			-s {input.tpr_md} \
 			-f {input.xtc_md} \
 			-o {output.dssp_dat} \
-			-num {output.dssp_num} > {log} 2>&1 || \
+			-num {output.dssp_num} > {log} 2>&1 
 		"""
 
 def parse_xvg(filepath, value_col_name="val"):
